@@ -29,6 +29,7 @@ var normals := PackedVector3Array()
 var sw := 0 # surface grid size
 var sh := 0
 var surfaces := PackedByteArray()
+var surface_fields := PackedByteArray() # RGBA8 for rendering, see HoleGenerator._fields
 
 
 func size_m() -> Vector2:
@@ -80,6 +81,13 @@ func get_contact_height(x: float, z: float) -> float:
 	return h
 
 
+## Beyond the generated grid (minus a margin) is out of bounds.
+func is_out_of_bounds(x: float, z: float) -> bool:
+	var m := 3.0
+	var sz := size_m()
+	return x < origin.x + m or x > origin.x + sz.x - m or z < origin.y + m or z > origin.y + sz.y - m
+
+
 func compute_normals() -> void:
 	normals.resize(hw * hh)
 	for iz in hh:
@@ -95,6 +103,10 @@ func compute_normals() -> void:
 func slope_at(x: float, z: float) -> float:
 	var n := get_normal(x, z)
 	return Vector2(n.x, n.z).length() / maxf(n.y, 1e-3)
+
+
+func green_center3() -> Vector3:
+	return Vector3(green.center.x, get_height(green.center.x, green.center.y), green.center.y)
 
 
 ## Horizontal distance from a point to the pin.

@@ -208,11 +208,14 @@ static func _build_grids(hole: HoleData, rng: RandomNumberGenerator, pin2: Vecto
 	hole.compute_normals()
 
 	hole.surfaces.resize(hole.sw * hole.sh)
+	hole.surface_fields.resize(hole.sw * hole.sh * 4)
 	for iz in hole.sh:
 		var z := hole.origin.y + iz * HoleData.SURF_CELL
 		for ix in hole.sw:
 			var x := hole.origin.x + ix * HoleData.SURF_CELL
-			hole.surfaces[iz * hole.sw + ix] = _classify(hole, Vector2(x, z))
+			var i := iz * hole.sw + ix
+			hole.surfaces[i] = _classify(hole, Vector2(x, z))
+			_fields(hole, Vector2(x, z), i * 4)
 
 
 ## Natural rolling ground: a ramp from tee level to green level plus noise
@@ -226,8 +229,11 @@ static func _natural(p: Vector2, hole: HoleData, noise: FastNoiseLite, amp: floa
 
 
 static func _classify(hole: HoleData, p: Vector2) -> int:
-	if hole.pond != null and hole.pond.contains(p):
-		return Surface.WATER
+	if hole.pond != null and hole.pond.bbox.grow(8.0).has_point(p):
+		# Water is wherever the ground dips below the pond's surface, so the
+		# drawn water and the physics always agree.
+		if hole.get_height(p.x, p.y) < hole.water_level:
+			return Surface.WATER
 	for b in hole.bunkers:
 		if b.contains(p):
 			return Surface.BUNKER
@@ -244,6 +250,36 @@ static func _classify(hole: HoleData, p: Vector2) -> int:
 		if q.distance_to(p) < hole.approach_half_width:
 			return Surface.FAIRWAY
 	return Surface.ROUGH
+
+
+## Rendering fields: smooth distance-based values (not hard IDs) so the
+## shader can draw clean, anti-aliased edges with bilinear filtering.
+## Each channel crosses its threshold exactly on the physics boundary:
+##   R green/fringe: 0.6 at the green edge, 0.312 at the fringe edge
+##   G fairway/tee:  0.5 at the edge
+##   B bunker:       0.5 at the edge
+##   A water:        0.5 at the waterline
+static func _fields(hole: HoleData, p: Vector2, o: int) -> void:
+	var r := 0.0
+	if hole.green.bbox.grow(hole.fringe_width + 4.0).has_point(p):
+		r = clampf(0.6 - hole.green.signed_dist(p) * 0.18, 0.0, 1.0)
+	var fd := maxf(absf(p.x) - 5.0, absf(p.y) - 4.0)
+	if hole.approach_start != hole.approach_end:
+		var q := Geometry2D.get_closest_point_to_segment(p, hole.approach_start, hole.approach_end)
+		fd = minf(fd, q.distance_to(p) - hole.approach_half_width)
+	var g := clampf(0.5 - fd * 0.25, 0.0, 1.0)
+	var bd := 99.0
+	for b in hole.bunkers:
+		if b.bbox.grow(3.0).has_point(p):
+			bd = minf(bd, b.signed_dist(p))
+	var bl := clampf(0.5 - bd * 0.25, 0.0, 1.0)
+	var a := 0.0
+	if hole.pond != null and hole.pond.bbox.grow(8.0).has_point(p):
+		a = clampf(0.5 + (hole.water_level - hole.get_height(p.x, p.y)) * 1.5, 0.0, 1.0)
+	hole.surface_fields[o] = int(r * 255.0)
+	hole.surface_fields[o + 1] = int(g * 255.0)
+	hole.surface_fields[o + 2] = int(bl * 255.0)
+	hole.surface_fields[o + 3] = int(a * 255.0)
 
 
 static func _place_trees(hole: HoleData, rng: RandomNumberGenerator, fwd: Vector2) -> void:

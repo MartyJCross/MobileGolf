@@ -95,3 +95,16 @@ func test_ball_finishes_on_generated_terrain() -> void:
 		if sim.phase == BallSim.Phase.STOPPED:
 			var ground := hole.get_height(sim.pos.x, sim.pos.z)
 			near(sim.pos.y, ground + BallSim.RADIUS, 0.05, "seed %d ball rests on the ground" % s)
+
+
+func test_wild_slice_goes_out_of_bounds() -> void:
+	var hole := HoleGenerator.generate(11)
+	hole.trees = [] # trees could legitimately stop it first
+	var sw := LaunchModel.Swing.new()
+	sw.face_to_path_deg = 14.0
+	sw.path_deg = 12.0
+	var l := LaunchModel.compute(Clubs.get_club(0), sw)
+	var sim := BallSim.new(hole)
+	sim.launch(hole.tee + Vector3(0, BallSim.RADIUS, 0), l.velocity.rotated(Vector3.UP, -0.6), l.spin.rotated(Vector3.UP, -0.6))
+	sim.simulate()
+	check(sim.phase == BallSim.Phase.OUT, "huge slice is out of bounds (phase %d)" % sim.phase)

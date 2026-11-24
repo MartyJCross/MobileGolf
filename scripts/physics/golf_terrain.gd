@@ -24,6 +24,10 @@ func get_surface(_x: float, _z: float) -> int:
 	return surface_type
 
 
+func is_out_of_bounds(_x: float, _z: float) -> bool:
+	return false
+
+
 ## Height of whatever the ball would land on (water surface for ponds).
 func get_contact_height(x: float, z: float) -> float:
 	return get_height(x, z)

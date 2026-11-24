@@ -20,7 +20,7 @@ enum State { IDLE, BACKSWING, DOWNSWING, DONE, CANCELLED }
 
 const FULL_SPEED_HPS := 3.0 # screen heights / second for a 100% swing
 const MIN_SPEED := 0.15
-const MAX_SPEED := 1.15
+const MAX_SPEED := 1.10
 const MIN_BACKSWING := 0.05 # of screen height
 const FULL_BACKSWING := 0.16
 const REVERSAL := 0.015 # upward travel that starts the downswing

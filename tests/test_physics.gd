@@ -34,6 +34,18 @@ func test_longer_clubs_go_further() -> void:
 		prev = sim.carry_distance()
 
 
+func test_overswing_gains_little() -> void:
+	for id in ["3i", "7i", "PW"]:
+		var stock := shoot(flat(Surface.ROUGH), id)
+		var sw := LaunchModel.Swing.new()
+		sw.speed_frac = 1.15
+		var hard := shoot(flat(Surface.ROUGH), id, sw)
+		var gain := hard.carry_distance() / stock.carry_distance()
+		# Real carry rises roughly in step with ball speed (~118% here); this
+		# guards against drag extrapolating to nothing at high speed.
+		check(gain > 1.08 and gain < 1.26, "%s at 115%% carries %.0f%% of stock" % [id, gain * 100.0])
+
+
 func test_square_face_on_path_flies_straight() -> void:
 	var sim := shoot(flat(), "7i")
 	near(sim.pos.x, 0.0, 0.05, "straight shot lateral")

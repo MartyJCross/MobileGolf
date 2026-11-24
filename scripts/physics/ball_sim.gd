@@ -18,7 +18,7 @@ extends RefCounted
 ## The whole shot is deterministic, so the game simulates it to completion
 ## instantly and plays back the recorded frames.
 
-enum Phase { FLIGHT, GROUND, STOPPED, WATER, HOLED }
+enum Phase { FLIGHT, GROUND, STOPPED, WATER, HOLED, OUT }
 
 const MASS := 0.04593 # kg
 const RADIUS := 0.021335 # m
@@ -84,7 +84,7 @@ var land_surface: int = -1
 var apex := 0.0
 var bounces := 0
 var hit_tree := false
-var water_pos := Vector3.ZERO
+var water_pos := Vector3.ZERO # where the ball went in the water / out of bounds
 var _trees_hit := {}
 var _record_acc := 0.0
 
@@ -114,7 +114,7 @@ func launch(from: Vector3, velocity: Vector3, spin_vec: Vector3) -> void:
 
 
 func is_done() -> bool:
-	return phase == Phase.STOPPED or phase == Phase.WATER or phase == Phase.HOLED
+	return phase == Phase.STOPPED or phase == Phase.WATER or phase == Phase.HOLED or phase == Phase.OUT
 
 
 func simulate(max_time: float = MAX_TIME) -> void:
@@ -162,7 +162,7 @@ func carry_distance() -> float:
 
 
 func total_distance() -> float:
-	var end := water_pos if phase == Phase.WATER else pos
+	var end := water_pos if (phase == Phase.WATER or phase == Phase.OUT) else pos
 	var d := end - start_pos
 	return Vector2(d.x, d.z).length()
 
@@ -181,7 +181,9 @@ func _accel(p: Vector3, v: Vector3, w: Vector3) -> Vector3:
 	var cd := cd0 + cd_spin * s
 	var t := clampf((16.0 - speed) / 6.0, 0.0, 1.0)
 	cd += cd_low_re * t * t * (3.0 - 2.0 * t)
-	cd = maxf(0.05, cd + cd_speed * (speed - 40.0) / 40.0)
+	# Speed trend only inside the range the fit saw (stock iron ball speeds
+	# top out ~64 m/s); extrapolating it would make fast balls drag-free.
+	cd = maxf(0.05, cd + cd_speed * (clampf(speed, 15.0, 64.0) - 40.0) / 40.0)
 	var cl := minf(cl0 + cl_k * pow(s, cl_pow), cl_max)
 	var q := 0.5 * RHO * AREA * speed * speed / MASS
 	a -= vrel / speed * (cd * q)
@@ -211,6 +213,14 @@ func _flight_step(dt: float) -> void:
 		apex = maxf(apex, pos.y - start_pos.y)
 
 	_check_trees()
+	if terrain.is_out_of_bounds(pos.x, pos.z):
+		phase = Phase.OUT
+		water_pos = pos
+		if not landed:
+			landed = true
+			carry_pos = pos
+			carry_time = time
+		return
 
 	var c0 := p0.y - RADIUS - terrain.get_contact_height(p0.x, p0.z)
 	var c1 := pos.y - RADIUS - terrain.get_contact_height(pos.x, pos.z)
@@ -362,6 +372,10 @@ func _ground_step(dt: float) -> void:
 	spin -= n * wn * (1.0 - exp(-6.0 * dt))
 
 	pos += vel * dt
+	if terrain.is_out_of_bounds(pos.x, pos.z):
+		phase = Phase.OUT
+		water_pos = pos
+		return
 	pos.y = terrain.get_height(pos.x, pos.z) + RADIUS
 
 	var cd := _cup_dist()
