@@ -18,7 +18,7 @@ extends RefCounted
 
 enum State { IDLE, BACKSWING, DOWNSWING, DONE, CANCELLED }
 
-const FULL_SPEED_HPS := 3.0 # screen heights / second for a 100% swing
+const FULL_SPEED_HPS := 4.5 # screen heights / second for a 100% swing (~65 cm/s on a 6.4" phone)
 const MIN_SPEED := 0.15
 const MAX_SPEED := 1.10
 const MIN_BACKSWING := 0.05 # of screen height

@@ -4,6 +4,12 @@ extends "res://tests/test_base.gd"
 const H := 2340.0 # S24 FE screen height in px
 
 
+## Flick duration that gives `frac` of full speed for a backswing `back`
+## (the synthetic flick travels back + 0.08 screen heights at constant speed).
+func flick_for(frac: float, back := 0.18) -> float:
+	return (back + 0.08) / (frac * SwingGesture.FULL_SPEED_HPS)
+
+
 ## Pull down `back` (fraction of H), then flick up past the start in
 ## `flick_time` seconds. `tilt_px` shifts the end point sideways; `bend_px`
 ## bows the path (positive = bends right near impact).
@@ -33,20 +39,20 @@ func swipe(back: float, flick_time: float, tilt_px := 0.0, bend_px := 0.0) -> Sw
 
 
 func test_fast_flick_is_full_speed() -> void:
-	var r := swipe(0.18, 0.09)
+	var r := swipe(0.18, flick_for(1.0))
 	check(r != null, "swing registered")
 	if r:
 		check(r.speed_frac > 0.95, "fast flick ~full (%.2f)" % r.speed_frac)
 
 
 func test_slower_flick_is_slower() -> void:
-	var fast := swipe(0.18, 0.09)
-	var slow := swipe(0.18, 0.25)
+	var fast := swipe(0.18, flick_for(1.0))
+	var slow := swipe(0.18, flick_for(0.5))
 	check(slow.speed_frac < fast.speed_frac * 0.6, "slower flick, less speed (%.2f vs %.2f)" % [slow.speed_frac, fast.speed_frac])
 
 
 func test_short_backswing_caps_speed() -> void:
-	var r := swipe(0.06, 0.03)
+	var r := swipe(0.06, flick_for(1.2, 0.06))
 	check(r.speed_frac < 0.7, "short backswing can't make full speed (%.2f)" % r.speed_frac)
 
 
@@ -82,7 +88,7 @@ func test_no_backswing_does_nothing() -> void:
 func test_overswing_adds_error() -> void:
 	var spread := 0.0
 	for i in 20:
-		var r := swipe(0.2, 0.04)
+		var r := swipe(0.2, flick_for(1.4, 0.2))
 		check(r.overswing, "very fast flick is an overswing")
 		spread += absf(r.swing.face_to_path_deg)
 	check(spread / 20.0 > 0.5, "overswing scatters the face (%.2f)" % (spread / 20.0))
