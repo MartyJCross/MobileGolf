@@ -2,7 +2,9 @@ class_name Hud
 extends CanvasLayer
 ## All on-screen UI, built in code. Emits intent signals; main.gd owns state.
 
-signal swing_touch(kind: int, pos: Vector2, time: float) # 0 down, 1 move, 2 up
+signal swing_pressed
+signal swing_released
+signal shape_changed(value: float)
 signal aim_drag(dx: float)
 signal view_tapped
 signal club_step(delta: int)
@@ -10,10 +12,10 @@ signal trajectory_changed(value: float)
 signal next_pressed
 signal retry_pressed
 signal map_toggled
-signal sensitivity_changed(value: float)
+signal tempo_changed(value: float)
 signal reset_stats_pressed
 
-const SWING_ZONE_TOP := 0.66 # fraction of screen height
+const SWING_ZONE_TOP := 0.62 # fraction of screen height
 
 var root: Control
 var view_area: Control
@@ -30,14 +32,16 @@ var club_label: Label
 var club_sub: Label
 var traj_slider: HSlider
 var traj_label: Label
-var swing_zone: SwingZone
+var swing_view: SwingView
+var shape_slider: HSlider
+var shape_label: Label
 var result_panel: PanelContainer
 var result_title: Label
 var result_sub: Label
 var result_body: Label
 var settings_panel: PanelContainer
-var sens_slider: HSlider
-var sens_label: Label
+var tempo_slider: HSlider
+var tempo_label: Label
 var toast: Label
 var controls_bar: Control
 var map_button: Button
@@ -194,7 +198,7 @@ func _build_controls() -> void:
 	controls_bar.anchor_bottom = SWING_ZONE_TOP
 	controls_bar.offset_left = 14
 	controls_bar.offset_right = -14
-	controls_bar.offset_top = -150
+	controls_bar.offset_top = -196
 	controls_bar.offset_bottom = -8
 	controls_bar.mouse_filter = Control.MOUSE_FILTER_STOP
 	root.add_child(controls_bar)
@@ -240,18 +244,52 @@ func _build_controls() -> void:
 	traj_row.add_child(traj_slider)
 	traj_row.add_child(_label("High", 22))
 	traj_label = _label("Stock", 22, Color(0.75, 0.85, 0.78))
-	traj_label.custom_minimum_size = Vector2(100, 0)
+	traj_label.custom_minimum_size = Vector2(110, 0)
 	traj_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	traj_row.add_child(traj_label)
 
+	var shape_row := HBoxContainer.new()
+	shape_row.add_theme_constant_override("separation", 10)
+	v.add_child(shape_row)
+	shape_row.add_child(_label("Draw", 22))
+	shape_slider = HSlider.new()
+	shape_slider.min_value = -1.0
+	shape_slider.max_value = 1.0
+	shape_slider.step = 0.5
+	shape_slider.value = 0.0
+	shape_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	shape_slider.custom_minimum_size = Vector2(0, 44)
+	shape_slider.value_changed.connect(func(val):
+		shape_label.text = _shape_text(val)
+		shape_changed.emit(val))
+	shape_row.add_child(shape_slider)
+	shape_row.add_child(_label("Fade", 22))
+	shape_label = _label("Straight", 22, Color(0.75, 0.85, 0.78))
+	shape_label.custom_minimum_size = Vector2(110, 0)
+	shape_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	shape_row.add_child(shape_label)
+
 
 func _build_swing_zone() -> void:
-	swing_zone = SwingZone.new()
-	swing_zone.set_anchors_preset(Control.PRESET_FULL_RECT)
-	swing_zone.anchor_top = SWING_ZONE_TOP
-	swing_zone.mouse_filter = Control.MOUSE_FILTER_STOP
-	swing_zone.gui_input.connect(_on_swing_input)
-	root.add_child(swing_zone)
+	swing_view = SwingView.new()
+	swing_view.set_anchors_preset(Control.PRESET_FULL_RECT)
+	swing_view.anchor_top = SWING_ZONE_TOP
+	swing_view.mouse_filter = Control.MOUSE_FILTER_STOP
+	swing_view.pressed.connect(func(): swing_pressed.emit())
+	swing_view.released.connect(func(): swing_released.emit())
+	root.add_child(swing_view)
+
+
+static func _shape_text(v: float) -> String:
+	if v <= -0.99:
+		return "Draw"
+	if v < -0.01:
+		return "Slight draw"
+	if v >= 0.99:
+		return "Fade"
+	if v > 0.01:
+		return "Slight fade"
+	return "Straight"
 
 
 func _build_result() -> void:
@@ -309,24 +347,25 @@ func _build_settings() -> void:
 	v.add_theme_constant_override("separation", 14)
 	settings_panel.add_child(v)
 	v.add_child(_label("Settings", 36))
-	v.add_child(_label("Swing sensitivity: raise it if full shots feel hard to reach, lower it if everything flies long.", 22, Color(0.8, 0.9, 0.82)))
+	v.add_child(_label("Downswing speed on screen. Slower is easier to time; real speed is the full challenge.", 22, Color(0.8, 0.9, 0.82)))
 	v.get_child(1).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	var row := HBoxContainer.new()
 	v.add_child(row)
-	sens_slider = HSlider.new()
-	sens_slider.min_value = 0.5
-	sens_slider.max_value = 2.0
-	sens_slider.step = 0.05
-	sens_slider.value = 1.0
-	sens_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	sens_slider.custom_minimum_size = Vector2(0, 50)
-	sens_slider.value_changed.connect(func(val):
-		sens_label.text = "x%.2f" % val
-		sensitivity_changed.emit(val))
-	row.add_child(sens_slider)
-	sens_label = _label("x1.00", 24)
-	row.add_child(sens_label)
-	var how := _label("How to swing: touch the bottom of the screen, pull down (backswing), then flick up through where you started. Flick speed = power. Tilt the flick to change your swing path; curve it to open or close the face. The ball curves the way your swipe curves.", 22, Color(0.8, 0.9, 0.82))
+	tempo_slider = HSlider.new()
+	tempo_slider.min_value = 0.3
+	tempo_slider.max_value = 1.0
+	tempo_slider.step = 0.05
+	tempo_slider.value = 0.55
+	tempo_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	tempo_slider.custom_minimum_size = Vector2(0, 50)
+	tempo_slider.value_changed.connect(func(val):
+		tempo_label.text = tempo_text(val)
+		tempo_changed.emit(val))
+	row.add_child(tempo_slider)
+	tempo_label = _label(tempo_text(0.55), 24)
+	tempo_label.custom_minimum_size = Vector2(150, 0)
+	row.add_child(tempo_label)
+	var how := _label("How to swing: hold your thumb on the golfer to swing back (hold longer = longer swing = more distance). Let go to start down: your arms pull the club with the wrists cocked (lag). Tap to release the club. Release on time for full speed and a square face. Early = the club flips: higher, closed face, pulls and hooks. Late = still lagging: lower, open face, pushes and slices. No tap = your wrists give way late on their own. Draw/Fade sets your stance and path.", 22, Color(0.8, 0.9, 0.82))
 	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(how)
 	var reset := Button.new()
@@ -350,17 +389,10 @@ func _on_view_input(e: InputEvent) -> void:
 		view_tapped.emit()
 
 
-func _on_swing_input(e: InputEvent) -> void:
-	var t := Time.get_ticks_usec() / 1.0e6
-	var p: Vector2 = e.position + swing_zone.global_position if (e is InputEventScreenTouch or e is InputEventScreenDrag) else Vector2.ZERO
-	if e is InputEventScreenTouch:
-		if e.index != 0:
-			return
-		swing_touch.emit(0 if e.pressed else 2, p, t)
-	elif e is InputEventScreenDrag:
-		if e.index != 0:
-			return
-		swing_touch.emit(1, p, t)
+static func tempo_text(v: float) -> String:
+	if v >= 0.99:
+		return "Real speed"
+	return "%d%% speed" % roundi(v * 100.0)
 
 
 # ------------------------------------------------------------------ updates
@@ -410,7 +442,6 @@ func set_club(club: Dictionary, stock_carry: float, traj: float) -> void:
 
 func set_aiming_visible(v: bool) -> void:
 	controls_bar.visible = v
-	swing_zone.visible = v
 	carry_marker.visible = v
 
 
@@ -453,43 +484,3 @@ class WindArrow extends Control:
 		var side := Vector2(-d.y, d.x)
 		draw_line(tail, tip, col, 5.0)
 		draw_colored_polygon(PackedVector2Array([tip, tip - d * r * 0.5 + side * r * 0.35, tip - d * r * 0.5 - side * r * 0.35]), col)
-
-
-class SwingZone extends Control:
-	## Shows where to swing, the backswing meter and the last swipe.
-	var hint := "Pull down, then flick up"
-	var start := Vector2.ZERO
-	var active := false
-	var backswing := 0.0
-	var trail: Array[Vector2] = []
-	var last_power := -1.0
-	var font_size := 24
-
-	func _draw() -> void:
-		draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.18))
-		var c := Vector2(size.x * 0.5, size.y * 0.32)
-		var f := get_theme_default_font()
-		if not active:
-			draw_circle(c, 26, Color(1, 1, 1, 0.9))
-			draw_line(c + Vector2(0, 40), c + Vector2(0, size.y * 0.5), Color(1, 1, 1, 0.25), 4.0)
-			var tw := f.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
-			draw_string(f, Vector2((size.x - tw) * 0.5, size.y * 0.32 - 50), hint, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color(1, 1, 1, 0.85))
-			if last_power >= 0.0:
-				var t := "Last swing %d%%" % roundi(last_power * 100.0)
-				var w2 := f.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
-				draw_string(f, Vector2((size.x - w2) * 0.5, size.y - 30), t, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Color(1, 1, 1, 0.6))
-		else:
-			var s := start - global_position
-			draw_line(Vector2(0, s.y), Vector2(size.x, s.y), Color(1, 1, 1, 0.35), 2.0)
-			draw_circle(s, 18, Color(1, 1, 1, 0.8))
-			# Backswing meter on the right edge.
-			var mh := size.y * 0.8
-			var mx := size.x - 40
-			var my := size.y * 0.1
-			draw_rect(Rect2(mx, my, 18, mh), Color(1, 1, 1, 0.15))
-			draw_rect(Rect2(mx, my, 18, mh * backswing), Color(1.0, 0.85, 0.3, 0.9))
-		if trail.size() > 1:
-			var pts := PackedVector2Array()
-			for p in trail:
-				pts.append(p - global_position)
-			draw_polyline(pts, Color(1.0, 0.95, 0.6, 0.8), 5.0, true)

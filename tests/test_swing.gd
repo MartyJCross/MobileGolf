@@ -1,94 +1,117 @@
 extends "res://tests/test_base.gd"
-## Swipe gesture tests using synthetic touch tracks.
+## Swing model (double pendulum with lag and release timing) tests.
 
-const H := 2340.0 # S24 FE screen height in px
-
-
-## Flick duration that gives `frac` of full speed for a backswing `back`
-## (the synthetic flick travels back + 0.08 screen heights at constant speed).
-func flick_for(frac: float, back := 0.18) -> float:
-	return (back + 0.08) / (frac * SwingGesture.FULL_SPEED_HPS)
+const TOP := SwingModel.FULL_TOP
+const COCK := SwingModel.MAX_COCK
 
 
-## Pull down `back` (fraction of H), then flick up past the start in
-## `flick_time` seconds. `tilt_px` shifts the end point sideways; `bend_px`
-## bows the path (positive = bends right near impact).
-func swipe(back: float, flick_time: float, tilt_px := 0.0, bend_px := 0.0) -> SwingGesture.Result:
-	var g := SwingGesture.new(H)
-	var start := Vector2(540, 1800)
+## Plays a swing through the real controls: hold for `hold_s`, lift, then
+## tap `tap_offset_ms` (on-screen ms) relative to the perfect release
+## (null = never tap).
+func play(hold_s: float, tap_offset_ms, shape := 0.0) -> SwingModel.Result:
+	var m := SwingModel.new()
+	m.shape = shape
+	m.press()
+	var dt := 1.0 / 240.0
 	var t := 0.0
-	g.touch_down(start, t)
-	for i in 20:
-		t += 0.02
-		g.touch_move(start + Vector2(0, back * H * (i + 1) / 20.0), t)
-	t += 0.15 # pause at the top
-	var top := start + Vector2(0, back * H)
-	var end := start + Vector2(tilt_px, -0.08 * H)
-	var steps := 24
-	for i in steps:
-		var f := float(i + 1) / steps
-		t += flick_time / steps
-		var p := top.lerp(end, f)
-		# Bow: bend grows toward the end (quadratic) -> path curves through impact.
-		p.x += bend_px * f * f
-		g.touch_move(p, t)
-		if g.state == SwingGesture.State.DONE:
-			break
-	g.touch_up(end, t + 0.01)
-	return g.result
+	while t < hold_s:
+		m.update(dt)
+		t += dt
+	m.lift()
+	var ideal := SwingModel.ideal_for(m.top)
+	var tap_at: float = -1.0 if tap_offset_ms == null else ideal.x + tap_offset_ms / 1000.0 * m.time_scale
+	while m.state == SwingModel.State.DOWNSWING:
+		if tap_at >= 0.0 and not m.tapped and m.sim_t + dt * m.time_scale > tap_at:
+			# Advance exactly to the tap moment, then tap.
+			while m.sim_t < tap_at and m.state == SwingModel.State.DOWNSWING:
+				m._step()
+			m.press()
+		m.update(dt)
+	return m.result
 
 
-func test_fast_flick_is_full_speed() -> void:
-	var r := swipe(0.18, flick_for(1.0))
-	check(r != null, "swing registered")
-	if r:
-		check(r.speed_frac > 0.95, "fast flick ~full (%.2f)" % r.speed_frac)
+func test_perfect_full_swing_is_full_speed_and_square() -> void:
+	var r := play(1.0, 0.0)
+	check(r != null, "swing finished")
+	near(r.speed_frac, 1.0, 0.01, "speed")
+	near(r.swing.face_to_path_deg, 0.0, 0.3, "face to path")
+	near(r.swing.path_deg, 0.0, 0.3, "path")
+	near(r.swing.strike_high_mm, 0.0, 0.5, "centred strike")
+	near(r.release_error_ms, 0.0, 3.0, "release error")
 
 
-func test_slower_flick_is_slower() -> void:
-	var fast := swipe(0.18, flick_for(1.0))
-	var slow := swipe(0.18, flick_for(0.5))
-	check(slow.speed_frac < fast.speed_frac * 0.6, "slower flick, less speed (%.2f vs %.2f)" % [slow.speed_frac, fast.speed_frac])
+func test_club_in_line_at_impact_with_perfect_timing() -> void:
+	var best := SwingModel.optimal_release_time(TOP, COCK)
+	var m := SwingModel.simulate(TOP, COCK, best)
+	check(absf(rad_to_deg(m.club - m.arm)) < 8.0, "club roughly in line with arms (%.1f deg)" % rad_to_deg(m.club - m.arm))
+	var speed_mph := m.v_raw / Clubs.MPH
+	check(speed_mph > 80.0 and speed_mph < 100.0, "realistic iron head speed (%.0f mph)" % speed_mph)
+	# Best release: lead arm a bit below horizontal.
+	var probe := SwingModel.simulate(TOP, COCK, -1.0)
+	check(best < probe.sim_t, "release happens before impact")
 
 
-func test_short_backswing_caps_speed() -> void:
-	var r := swipe(0.06, flick_for(1.2, 0.06))
-	check(r.speed_frac < 0.7, "short backswing can't make full speed (%.2f)" % r.speed_frac)
+func test_early_release_flips_closes_face_and_loses_speed() -> void:
+	var r := play(1.0, -40.0)
+	check(r.speed_frac < 0.995, "early release loses speed (%.3f)" % r.speed_frac)
+	check(r.lag_deg > 5.0, "club flipped past the hands (%.1f)" % r.lag_deg)
+	check(r.swing.face_to_path_deg < -1.5, "face closed: hook (%.1f)" % r.swing.face_to_path_deg)
+	check(r.swing.path_deg < 0.0, "out-to-in path")
+	check(r.swing.loft_offset_deg > 1.0, "adds loft")
 
 
-func test_straight_swipe_is_square() -> void:
-	var r := swipe(0.18, 0.12)
-	near(r.swing.path_deg, 0.0, 0.5, "path")
-	near(r.swing.face_to_path_deg, 0.0, 0.5, "face to path")
+func test_late_release_lags_opens_face_and_loses_speed() -> void:
+	var r := play(1.0, 40.0)
+	check(r.speed_frac < 0.97, "late release loses speed (%.3f)" % r.speed_frac)
+	check(r.swing.face_to_path_deg > 1.5, "face open: slice (%.1f)" % r.swing.face_to_path_deg)
+	check(r.swing.path_deg > 0.0, "in-to-out path")
+	check(r.swing.loft_offset_deg < -1.0, "delofted (shaft leaning forward)")
 
 
-func test_tilted_swipe_sets_path() -> void:
-	var r := swipe(0.18, 0.12, 200.0)
-	check(r.swing.path_deg > 2.0, "tilt right = in-to-out path (%.1f)" % r.swing.path_deg)
-	near(r.swing.face_to_path_deg, 0.0, 0.5, "no bend, face matches path")
-	var l := swipe(0.18, 0.12, -200.0)
-	check(l.swing.path_deg < -2.0, "tilt left = out-to-in path")
+func test_timing_error_grows_with_offset() -> void:
+	var prev := 0.0
+	for off in [10.0, 25.0, 50.0]:
+		var r := play(1.0, off)
+		check(absf(r.swing.face_to_path_deg) > prev, "%.0f ms late opens the face more" % off)
+		prev = absf(r.swing.face_to_path_deg)
 
 
-func test_bent_swipe_sets_face() -> void:
-	var r := swipe(0.18, 0.12, 0.0, 80.0)
-	check(r.swing.face_to_path_deg > 2.0, "bend right = open face, fade (%.1f)" % r.swing.face_to_path_deg)
-	var l := swipe(0.18, 0.12, 0.0, -80.0)
-	check(l.swing.face_to_path_deg < -2.0, "bend left = closed face, draw (%.1f)" % l.swing.face_to_path_deg)
+func test_no_tap_is_a_weak_late_release() -> void:
+	var r := play(1.0, null)
+	check(not r.released_by_player, "wrists gave way on their own")
+	check(r.speed_frac < 0.85, "weak (%.2f)" % r.speed_frac)
+	check(r.swing.face_to_path_deg > 4.0, "big push-slice face (%.1f)" % r.swing.face_to_path_deg)
 
 
-func test_no_backswing_does_nothing() -> void:
-	var g := SwingGesture.new(H)
-	g.touch_down(Vector2(500, 1800), 0.0)
-	g.touch_move(Vector2(500, 1750), 0.05)
-	g.touch_up(Vector2(500, 1700), 0.1)
-	check(g.result == null, "tap/upward swipe is not a swing")
+func test_backswing_length_controls_speed() -> void:
+	var prev := 0.0
+	for hold in [0.45, 0.6, 0.75, 1.0]:
+		var r := play(hold, 0.0)
+		check(r.speed_frac > prev + 0.05, "longer backswing, more speed (hold %.2f -> %.2f)" % [hold, r.speed_frac])
+		near(r.swing.face_to_path_deg, 0.0, 0.5, "perfect timing is square at any length (hold %.2f)" % hold)
+		prev = r.speed_frac
+	var half := play(0.55, 0.0)
+	check(half.speed_frac > 0.5 and half.speed_frac < 0.75, "about a half swing (%.2f)" % half.speed_frac)
 
 
-func test_overswing_adds_error() -> void:
-	var spread := 0.0
-	for i in 20:
-		var r := swipe(0.2, flick_for(1.4, 0.2))
-		check(r.overswing, "very fast flick is an overswing")
-		spread += absf(r.swing.face_to_path_deg)
-	check(spread / 20.0 > 0.5, "overswing scatters the face (%.2f)" % (spread / 20.0))
+func test_overswing_is_a_bit_faster_but_wild() -> void:
+	var r := play(1.35, 0.0)
+	check(r.overswing, "flagged as overswing")
+	check(r.speed_frac > 1.0 and r.speed_frac < 1.12, "a little extra speed (%.2f)" % r.speed_frac)
+
+
+func test_shape_sets_path_and_face() -> void:
+	var draw := play(1.0, 0.0, -1.0)
+	check(draw.swing.path_deg > 3.0 and draw.swing.face_to_path_deg < -2.0, "draw set-up: in-to-out, face closed to path")
+	var l := LaunchModel.compute(Clubs.get_club(4), draw.swing)
+	check(l.spin_axis_deg < -2.0 and l.launch_h_deg > 0.0, "starts right, draws left")
+	var fade := play(1.0, 0.0, 1.0)
+	check(fade.swing.path_deg < -3.0 and fade.swing.face_to_path_deg > 2.0, "fade set-up")
+
+
+func test_cancel_tiny_backswing() -> void:
+	var m := SwingModel.new()
+	m.press()
+	m.update(0.1)
+	m.lift()
+	check(m.state == SwingModel.State.IDLE, "tiny backswing cancels")

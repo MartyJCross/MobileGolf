@@ -16,7 +16,7 @@ var greens_hit := 0
 var recent: Array = []
 var hole_number := 1
 var base_seed := 0
-var sensitivity := 1.0
+var tempo := 0.55 # downswing slow-motion factor
 
 
 func load_stats() -> void:
@@ -32,7 +32,7 @@ func load_stats() -> void:
 	recent = cfg.get_value("stats", "recent", [])
 	hole_number = cfg.get_value("game", "hole_number", 1)
 	base_seed = cfg.get_value("game", "base_seed", randi())
-	sensitivity = cfg.get_value("settings", "sensitivity", 1.0)
+	tempo = cfg.get_value("settings", "tempo", 0.55)
 
 
 func save_stats() -> void:
@@ -45,7 +45,7 @@ func save_stats() -> void:
 	cfg.set_value("stats", "recent", recent)
 	cfg.set_value("game", "hole_number", hole_number)
 	cfg.set_value("game", "base_seed", base_seed)
-	cfg.set_value("settings", "sensitivity", sensitivity)
+	cfg.set_value("settings", "tempo", tempo)
 	cfg.save(PATH)
 
 

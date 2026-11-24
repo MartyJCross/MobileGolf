@@ -38,6 +38,8 @@ class Swing:
 	var trajectory: float = 0.0 # -1 low (ball back) .. +1 high (ball forward)
 	var strike_toe_mm: float = 0.0 # + toe, - heel
 	var strike_high_mm: float = 0.0 # + high on face, - thin/low
+	var loft_offset_deg: float = 0.0 # shaft lean at impact: + adds loft (flip), - delofts (lag)
+	var aoa_offset_deg: float = 0.0 # + shallower, - steeper
 
 
 class Result:
@@ -100,8 +102,8 @@ static func compute(club: Dictionary, swing: Swing) -> Result:
 	var stock_aoa: float = club["aoa"]
 	var stock_spin_loft := deg_to_rad(stock_dl - stock_aoa)
 
-	var aoa := stock_aoa + swing.trajectory * TRAJ_AOA_DEG
-	var dl := stock_dl + swing.trajectory * TRAJ_LOFT_DEG + swing.strike_high_mm * STRIKE_V_LOFT_PER_MM
+	var aoa := stock_aoa + swing.trajectory * TRAJ_AOA_DEG + swing.aoa_offset_deg
+	var dl := stock_dl + swing.trajectory * TRAJ_LOFT_DEG + swing.strike_high_mm * STRIKE_V_LOFT_PER_MM + swing.loft_offset_deg
 	var face := swing.path_deg + swing.face_to_path_deg + swing.strike_toe_mm * STRIKE_H_FACE_PER_MM
 
 	var c := dir_from(swing.path_deg, aoa)

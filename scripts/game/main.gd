@@ -23,11 +23,15 @@ var tracer: Tracer
 var aim_line: Tracer
 var carry_ring: MeshInstance3D
 var hud: Hud
-var gesture: SwingGesture
+var swing := SwingModel.new()
+var shape := 0.0
+var _swing_clock := 0.0
+var _table_task := -1
+var _manual_swing := false # automation steps the downswing itself
 
 var sim: BallSim
 var last_launch: LaunchModel.Result
-var last_gesture: SwingGesture.Result
+var last_swing: SwingModel.Result
 var play_t := 0.0
 var play_speed := 1.0
 var ball_start := Vector3.ZERO
@@ -51,10 +55,13 @@ func _ready() -> void:
 	if _auto.has("seed"):
 		stats.base_seed = int(_auto["seed"])
 		stats.hole_number = 1
-	gesture = SwingGesture.new(get_viewport().get_visible_rect().size.y)
-	gesture.sensitivity = stats.sensitivity
-	hud.sens_slider.set_value_no_signal(stats.sensitivity)
-	hud.sens_label.text = "x%.2f" % stats.sensitivity
+	# Perfect-release table for the swing model (used to score timing).
+	_table_task = WorkerThreadPool.add_task(SwingModel.build_table, false, "swing table")
+	swing.time_scale = stats.tempo
+	hud.tempo_slider.set_value_no_signal(stats.tempo)
+	hud.tempo_label.text = Hud.tempo_text(stats.tempo)
+	hud.swing_view.model = swing
+	_swing_clock = Time.get_ticks_usec() / 1.0e6
 	hud.set_stats(stats)
 	_load_hole(stats.hole_number)
 	if not _auto.is_empty():
@@ -66,6 +73,9 @@ func _exit_tree() -> void:
 	if _next_task != -1:
 		WorkerThreadPool.wait_for_task_completion(_next_task)
 		_next_task = -1
+	if _table_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_table_task)
+		_table_task = -1
 
 
 # ------------------------------------------------------------------ world
@@ -150,7 +160,9 @@ func _build_world() -> void:
 
 	hud = Hud.new()
 	add_child(hud)
-	hud.swing_touch.connect(_on_swing_touch)
+	hud.swing_pressed.connect(_on_swing_pressed)
+	hud.swing_released.connect(_on_swing_released)
+	hud.shape_changed.connect(func(v): shape = v)
 	hud.aim_drag.connect(_on_aim_drag)
 	hud.view_tapped.connect(_on_view_tapped)
 	hud.club_step.connect(_on_club_step)
@@ -158,9 +170,9 @@ func _build_world() -> void:
 	hud.next_pressed.connect(_on_next)
 	hud.retry_pressed.connect(_on_retry)
 	hud.map_toggled.connect(func(): map_view = not map_view; _snap_camera())
-	hud.sensitivity_changed.connect(func(v):
-		stats.sensitivity = v
-		gesture.sensitivity = v
+	hud.tempo_changed.connect(func(v):
+		stats.tempo = v
+		swing.time_scale = v
 		stats.save_stats())
 	hud.reset_stats_pressed.connect(func():
 		stats.reset()
@@ -206,6 +218,7 @@ func _reset_ball() -> void:
 	ball.position = ball_start
 	aim_yaw = rad_to_deg(atan2(hole.pin.x, -hole.pin.z))
 	tracer.clear()
+	swing.reset()
 
 
 func _enter_aiming() -> void:
@@ -216,8 +229,8 @@ func _enter_aiming() -> void:
 	hud.set_aiming_visible(true)
 	hud.set_hole_info(hole_no, hole, aim_yaw)
 	hud.set_stats(stats)
-	hud.swing_zone.active = false
-	hud.swing_zone.queue_redraw()
+	hud.swing_view.visible = true
+	swing.reset()
 	_refresh_club()
 	_snap_camera()
 
@@ -250,31 +263,29 @@ func _on_trajectory(v: float) -> void:
 	_refresh_club()
 
 
-func _on_swing_touch(kind: int, pos: Vector2, t: float) -> void:
+func _advance_swing() -> void:
+	var now := Time.get_ticks_usec() / 1.0e6
+	if not _manual_swing:
+		swing.update(now - _swing_clock)
+	_swing_clock = now
+	if swing.result != null and state == State.AIMING:
+		_hit(swing.result)
+
+
+func _on_swing_pressed() -> void:
 	if state != State.AIMING:
 		return
-	var z := hud.swing_zone
-	match kind:
-		0:
-			gesture.screen_h = get_viewport().get_visible_rect().size.y
-			gesture.touch_down(pos, t)
-			z.active = true
-			z.start = pos
-			z.trail = [pos]
-		1:
-			gesture.touch_move(pos, t)
-			z.trail.append(pos)
-		2:
-			gesture.touch_up(pos, t)
-			z.active = false
-	z.backswing = gesture.backswing_amount()
-	z.queue_redraw()
-	if gesture.state == SwingGesture.State.DONE:
-		z.active = false
-		z.last_power = gesture.result.speed_frac
-		z.queue_redraw()
-		_hit(gesture.result)
-		gesture.reset()
+	_advance_swing() # catch the model up to this exact moment first
+	if swing.state == SwingModel.State.IDLE:
+		swing.shape = shape
+	swing.press()
+
+
+func _on_swing_released() -> void:
+	if state != State.AIMING:
+		return
+	_advance_swing()
+	swing.lift()
 
 
 func _on_next() -> void:
@@ -294,12 +305,13 @@ func _on_retry() -> void:
 
 # ------------------------------------------------------------------ shot
 
-func _hit(g: SwingGesture.Result) -> void:
-	last_gesture = g
-	var swing := g.swing
-	swing.trajectory = trajectory
+func _hit(r: SwingModel.Result) -> void:
+	last_swing = r
+	var sw := r.swing
+	sw.trajectory = trajectory
 	var club := Clubs.get_club(club_idx)
-	last_launch = LaunchModel.compute(club, swing)
+	last_launch = LaunchModel.compute(club, sw)
+	hud.swing_view.feedback = _swing_feedback(r)
 	var yaw := -deg_to_rad(aim_yaw)
 	sim = BallSim.new(hole)
 	sim.rng.seed = randi()
@@ -376,15 +388,29 @@ func _miss_text(p: Vector3) -> String:
 
 func _shot_report() -> String:
 	var l := last_launch
-	var g := last_gesture
+	var g := last_swing
 	var mph := 1.0 / Clubs.MPH
 	var lines: Array[String] = []
 	lines.append("Carry %.1f m   Total %.1f m   Peak %.1f m" % [sim.carry_distance(), sim.total_distance(), sim.apex])
 	lines.append("Ball %.0f mph   Launch %.1f°   Spin %d rpm" % [l.ball_speed * mph, l.launch_v_deg, roundi(l.spin_rpm)])
 	lines.append("Spin axis %s   Landed %.0f° at %d rpm" % [_lr(l.spin_axis_deg, "°"), sim.land_angle_deg, roundi(sim.land_spin_rpm)])
-	lines.append("Swing %d%%%s   Club %.0f mph   Smash %.2f" % [roundi(g.speed_frac * 100.0), " (overswing!)" if g.overswing else "", l.club_speed * mph, l.smash])
+	lines.append("Backswing %d%%%s   %s" % [roundi(g.backswing * 100.0), " (over-swing!)" if g.overswing else "", _release_text(g)])
+	lines.append("Club %.0f mph (%d%%)   Lag at impact %+.0f°   Smash %.2f" % [l.club_speed * mph, roundi(g.speed_frac * 100.0), g.lag_deg, l.smash])
 	lines.append("Path %s   Face to path %s" % [_path_text(l.path_deg), _ftp_text(l.face_deg - l.path_deg)])
 	return "\n".join(lines)
+
+
+func _release_text(g: SwingModel.Result) -> String:
+	if not g.released_by_player:
+		return "No release: wrists gave way late"
+	var ms := g.release_error_ms
+	if absf(ms) < 4.0:
+		return "Release: perfect"
+	return "Release %d ms %s" % [roundi(absf(ms)), "late" if ms > 0 else "early"]
+
+
+func _swing_feedback(g: SwingModel.Result) -> String:
+	return "%s  ·  Club speed %d%%" % [_release_text(g), roundi(g.speed_frac * 100.0)]
 
 
 func _lr(v: float, unit: String) -> String:
@@ -409,6 +435,9 @@ func _ftp_text(v: float) -> String:
 
 func _process(delta: float) -> void:
 	_frame += 1
+	_advance_swing()
+	if state == State.FLYING and swing.state == SwingModel.State.DONE:
+		hud.swing_view.visible = false
 	match state:
 		State.AIMING:
 			_update_camera(delta)
@@ -619,18 +648,46 @@ func _run_automation() -> void:
 		if _auto.has("quit"):
 			get_tree().quit()
 		return
-	if _auto.has("swipe"):
-		await _synthetic_swipe(float(_auto.get("flick", "0.1")), float(_auto.get("bend", "0")))
-		print("SWIPE power %.2f path %.1f ftp %.1f" % [last_gesture.speed_frac, last_gesture.swing.path_deg, last_gesture.swing.face_to_path_deg])
-		await _wait_result()
-		return
-	var g := SwingGesture.Result.new()
-	g.speed_frac = float(_auto.get("power", "1.0"))
-	g.swing.speed_frac = g.speed_frac
-	g.swing.face_to_path_deg = float(_auto.get("ftp", "0"))
 	if _auto.has("club"):
 		club_idx = Clubs.index_of(_auto["club"])
-	_hit(g)
+		_refresh_club()
+	if _auto.has("shape"):
+		shape = float(_auto["shape"])
+	# Real controls: hold, let go, tap (offset in on-screen ms from perfect).
+	var hold := float(_auto.get("hold", "1.0"))
+	var tap_ms := float(_auto.get("tap", "0"))
+	_on_swing_pressed()
+	var t0 := Time.get_ticks_usec() / 1.0e6
+	var shot_mid := false
+	while Time.get_ticks_usec() / 1.0e6 - t0 < hold:
+		await get_tree().process_frame
+		if not shot_mid and Time.get_ticks_usec() / 1.0e6 - t0 > hold * 0.6:
+			shot_mid = true
+			_screenshot("backswing")
+	_on_swing_released()
+	var ideal := SwingModel.ideal_for(swing.top)
+	var tap_at := ideal.x + tap_ms / 1000.0 * swing.time_scale
+	var lag_shot := false
+	_manual_swing = true
+	while state == State.AIMING:
+		# Step the model ourselves so the tap lands at the exact moment even
+		# at a low headless frame rate.
+		if swing.state == SwingModel.State.DOWNSWING:
+			if not swing.tapped and _auto.get("tap", "") != "none" and swing.sim_t >= tap_at - 0.0005:
+				swing.press()
+			if not lag_shot and swing.sim_t >= ideal.x * 0.85:
+				lag_shot = true
+				_screenshot("downswing")
+		_swing_clock = Time.get_ticks_usec() / 1.0e6
+		for i in 8:
+			if swing.state == SwingModel.State.DOWNSWING and not swing.tapped and _auto.get("tap", "") != "none" and swing.sim_t >= tap_at - 0.0005:
+				swing.press()
+			swing.update(0.0025)
+		if swing.result != null and state == State.AIMING:
+			_hit(swing.result)
+		await get_tree().process_frame
+	_manual_swing = false
+	print("SWING backswing %.2f speed %.3f release %.1f ms lag %.1f ftp %.2f path %.2f" % [last_swing.backswing, last_swing.speed_frac, last_swing.release_error_ms, last_swing.lag_deg, last_swing.swing.face_to_path_deg, last_swing.swing.path_deg])
 	await _wait_result()
 
 
@@ -648,52 +705,6 @@ func _wait_result() -> void:
 	print(hud.result_body.text)
 	if _auto.has("quit"):
 		get_tree().quit()
-
-
-## Sends real touch events through the viewport: press in the swing zone,
-## pull down, then flick up past the start over `flick` seconds. Exercises
-## the actual UI hit-testing and gesture code.
-func _synthetic_swipe(flick: float, bend: float) -> void:
-	var vs := get_viewport().get_visible_rect().size
-	var start := Vector2(vs.x * 0.5, vs.y * 0.8)
-	_touch(true, start)
-	await get_tree().process_frame
-	var p := start
-	for i in 12:
-		var np := start + Vector2(0, vs.y * 0.17 * (i + 1) / 12.0)
-		_drag(np, np - p)
-		p = np
-		await get_tree().process_frame
-	await get_tree().create_timer(0.15).timeout
-	var top := p
-	var end := start + Vector2(0, -vs.y * 0.08)
-	var t0 := Time.get_ticks_usec() / 1.0e6
-	while state == State.AIMING:
-		var f := clampf((Time.get_ticks_usec() / 1.0e6 - t0) / flick, 0.0, 1.0)
-		var np2 := top.lerp(end, f) + Vector2(bend * f * f, 0)
-		_drag(np2, np2 - p)
-		p = np2
-		if f >= 1.0:
-			break
-		OS.delay_msec(4)
-		await get_tree().process_frame
-	_touch(false, p)
-
-
-func _touch(pressed: bool, pos: Vector2) -> void:
-	var e := InputEventScreenTouch.new()
-	e.index = 0
-	e.pressed = pressed
-	e.position = pos
-	Input.parse_input_event(e)
-
-
-func _drag(pos: Vector2, rel: Vector2) -> void:
-	var e := InputEventScreenDrag.new()
-	e.index = 0
-	e.position = pos
-	e.relative = rel
-	Input.parse_input_event(e)
 
 
 func _screenshot(tag: String) -> void:
