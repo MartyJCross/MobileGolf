@@ -24,6 +24,7 @@ var aim_line: Tracer
 var carry_ring: MeshInstance3D
 var hud: Hud
 var swing := SwingModel.new()
+var controls := SwingControls.new(swing)
 var shape := 0.0
 var _swing_clock := 0.0
 var _table_task := -1
@@ -61,6 +62,10 @@ func _ready() -> void:
 	hud.tempo_slider.set_value_no_signal(stats.tempo)
 	hud.tempo_label.text = Hud.tempo_text(stats.tempo)
 	hud.swing_view.model = swing
+	hud.swing_view.controls = controls
+	controls.scheme = stats.controls
+	hud.swing_view.show_mark = stats.show_mark
+	hud.set_controls(stats.controls, stats.show_mark)
 	_swing_clock = Time.get_ticks_usec() / 1.0e6
 	hud.set_stats(stats)
 	_load_hole(stats.hole_number)
@@ -160,8 +165,16 @@ func _build_world() -> void:
 
 	hud = Hud.new()
 	add_child(hud)
-	hud.swing_pressed.connect(_on_swing_pressed)
-	hud.swing_released.connect(_on_swing_released)
+	hud.swing_touch.connect(_on_swing_touch)
+	hud.controls_changed.connect(func(sc):
+		stats.controls = sc
+		controls.scheme = sc
+		swing.reset()
+		stats.save_stats())
+	hud.mark_toggled.connect(func(on):
+		stats.show_mark = on
+		hud.swing_view.show_mark = on
+		stats.save_stats())
 	hud.shape_changed.connect(func(v): shape = v)
 	hud.aim_drag.connect(_on_aim_drag)
 	hud.view_tapped.connect(_on_view_tapped)
@@ -272,20 +285,14 @@ func _advance_swing() -> void:
 		_hit(swing.result)
 
 
-func _on_swing_pressed() -> void:
-	if state != State.AIMING:
+func _on_swing_touch(kind: int, pos: Vector2) -> void:
+	if state != State.AIMING or hud.settings_panel.visible:
 		return
 	_advance_swing() # catch the model up to this exact moment first
 	if swing.state == SwingModel.State.IDLE:
 		swing.shape = shape
-	swing.press()
-
-
-func _on_swing_released() -> void:
-	if state != State.AIMING:
-		return
-	_advance_swing()
-	swing.lift()
+	controls.panel_height = hud.swing_view.size.y
+	controls.handle(kind, pos)
 
 
 func _on_next() -> void:
@@ -644,6 +651,12 @@ func _run_automation() -> void:
 		map_view = false
 		_snap_camera()
 		await get_tree().process_frame
+	if _auto.has("settings"):
+		hud.settings_panel.visible = true
+		for i in 3:
+			await get_tree().process_frame
+		_screenshot("settings")
+		hud.settings_panel.visible = false
 	if not _auto.has("autoswing"):
 		if _auto.has("quit"):
 			get_tree().quit()
@@ -653,18 +666,22 @@ func _run_automation() -> void:
 		_refresh_club()
 	if _auto.has("shape"):
 		shape = float(_auto["shape"])
-	# Real controls: hold, let go, tap (offset in on-screen ms from perfect).
-	var hold := float(_auto.get("hold", "1.0"))
+	# Real controls (Pull & Tap): drag down to `back` of a full backswing,
+	# let go, then tap `tap` on-screen ms from the perfect release.
+	controls.scheme = SwingControls.Scheme.PULL_TAP
+	var back := float(_auto.get("back", "1.0"))
 	var tap_ms := float(_auto.get("tap", "0"))
-	_on_swing_pressed()
-	var t0 := Time.get_ticks_usec() / 1.0e6
-	var shot_mid := false
-	while Time.get_ticks_usec() / 1.0e6 - t0 < hold:
+	var ph := hud.swing_view.size.y
+	var p0 := Vector2(hud.swing_view.size.x * 0.5, ph * 0.3)
+	_on_swing_touch(SwingControls.DOWN, p0)
+	for i in 10:
+		_on_swing_touch(SwingControls.MOVE, p0 + Vector2(0, SwingControls.PULL_RANGE * ph * back * (i + 1) / 10.0))
 		await get_tree().process_frame
-		if not shot_mid and Time.get_ticks_usec() / 1.0e6 - t0 > hold * 0.6:
-			shot_mid = true
-			_screenshot("backswing")
-	_on_swing_released()
+	while absf(swing.arm - swing.backswing_target) > 0.001:
+		await get_tree().process_frame
+	await get_tree().process_frame
+	_screenshot("backswing")
+	_on_swing_touch(SwingControls.UP, p0 + Vector2(0, SwingControls.PULL_RANGE * ph * back))
 	var ideal := SwingModel.ideal_for(swing.top)
 	var tap_at := ideal.x + tap_ms / 1000.0 * swing.time_scale
 	var lag_shot := false
@@ -674,14 +691,14 @@ func _run_automation() -> void:
 		# at a low headless frame rate.
 		if swing.state == SwingModel.State.DOWNSWING:
 			if not swing.tapped and _auto.get("tap", "") != "none" and swing.sim_t >= tap_at - 0.0005:
-				swing.press()
+				_on_swing_touch(SwingControls.DOWN, p0)
 			if not lag_shot and swing.sim_t >= ideal.x * 0.85:
 				lag_shot = true
 				_screenshot("downswing")
 		_swing_clock = Time.get_ticks_usec() / 1.0e6
 		for i in 8:
 			if swing.state == SwingModel.State.DOWNSWING and not swing.tapped and _auto.get("tap", "") != "none" and swing.sim_t >= tap_at - 0.0005:
-				swing.press()
+				controls.handle(SwingControls.DOWN, p0)
 			swing.update(0.0025)
 		if swing.result != null and state == State.AIMING:
 			_hit(swing.result)

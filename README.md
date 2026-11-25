@@ -13,15 +13,18 @@ close you finish to the pin. Your average is saved on the phone.
    * **Trajectory** Low ↔ High: low flies under the wind and runs out, high spins and stops.
    * **Shape** Draw ↔ Fade: sets your stance and swing path. Timing decides whether it comes off.
 3. Aim by dragging left/right on the course view (or use **Map** for an overhead view).
-4. Swing with the golfer at the bottom of the screen:
-   * **Hold** to swing back. Hold longer = longer backswing = more distance
-     (watch the meter; the white mark is a full swing, past it is an over-swing).
-   * **Let go** to start down. Your arms pull the club down with the wrists cocked: that's the lag.
-   * **Tap** to release the club. The wrists unhinge and the club whips through.
+4. Swing with the golfer at the bottom of the screen (default controls, **Pull & Tap**):
+   * **Drag down** to pull the club back. It follows your thumb; slide back up to shorten it.
+     Further = more distance (the white mark on the meter is a full swing, past it is an over-swing).
+   * **Let go** to swing. Your arms pull the club down with the wrists cocked: that's the lag.
+   * **Tap as the hands cross the green line** to release the club. The line is where the
+     physics says a perfect release happens for your backswing.
      * On time: full speed, square face.
      * Early (casting): the club flips past your hands: higher, weaker, face closing, pulls and hooks.
      * Late: the club is still lagging: lower, face open, pushes and slices.
      * No tap: your wrists give way late on their own: a weak, low push-slice.
+   * Other schemes in **Settings → Controls**: One Touch (drag down, push up, lift at the line),
+     Hold & Tap, Three Taps. The green line can be turned off for a harder game.
 
 The downswing plays in slow motion so it can be timed by a human thumb.
 **Settings → Downswing speed** goes from 30% up to real speed.
@@ -45,6 +48,14 @@ with the arms at impact.
 * **Landing:** turf impact model (Penner) where backspin and landing angle decide
   whether the ball releases, checks or spins back; green firmness matters.
 * **Roll:** speed-dependent rolling resistance calibrated to Stimp 11; slopes break the ball.
+
+## Choosing the controls
+
+`tests/tools/experiment_controls.gd` compares the schemes with simulated players
+(typical human timing/positioning errors fed through the real swing and ball physics).
+The release line halves the average miss (30 m → 15 m on a full 7-iron); dragging the
+backswing gives the best distance control on partial swings; One Touch is less precise
+because lifting a thumb is less precise than tapping.
 
 ## Development
 

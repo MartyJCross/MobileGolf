@@ -2,8 +2,9 @@ class_name Hud
 extends CanvasLayer
 ## All on-screen UI, built in code. Emits intent signals; main.gd owns state.
 
-signal swing_pressed
-signal swing_released
+signal swing_touch(kind: int, pos: Vector2)
+signal controls_changed(scheme: int)
+signal mark_toggled(on: bool)
 signal shape_changed(value: float)
 signal aim_drag(dx: float)
 signal view_tapped
@@ -42,6 +43,9 @@ var result_body: Label
 var settings_panel: PanelContainer
 var tempo_slider: HSlider
 var tempo_label: Label
+var scheme_buttons: Array[Button] = []
+var scheme_desc: Label
+var mark_check: CheckButton
 var toast: Label
 var controls_bar: Control
 var map_button: Button
@@ -275,8 +279,7 @@ func _build_swing_zone() -> void:
 	swing_view.set_anchors_preset(Control.PRESET_FULL_RECT)
 	swing_view.anchor_top = SWING_ZONE_TOP
 	swing_view.mouse_filter = Control.MOUSE_FILTER_STOP
-	swing_view.pressed.connect(func(): swing_pressed.emit())
-	swing_view.released.connect(func(): swing_released.emit())
+	swing_view.touch.connect(func(kind, pos): swing_touch.emit(kind, pos))
 	root.add_child(swing_view)
 
 
@@ -342,12 +345,20 @@ func _build_settings() -> void:
 	settings_panel.offset_right = -30
 	settings_panel.grow_vertical = Control.GROW_DIRECTION_BOTH
 	settings_panel.visible = false
+	var solid := StyleBoxFlat.new()
+	solid.bg_color = Color(0.05, 0.1, 0.07, 0.98)
+	solid.set_corner_radius_all(18)
+	solid.set_content_margin_all(18)
+	solid.border_color = Color(0.3, 0.5, 0.36)
+	solid.set_border_width_all(2)
+	settings_panel.add_theme_stylebox_override("panel", solid)
+	settings_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	root.add_child(settings_panel)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 14)
 	settings_panel.add_child(v)
 	v.add_child(_label("Settings", 36))
-	v.add_child(_label("Downswing speed on screen. Slower is easier to time; real speed is the full challenge.", 22, Color(0.8, 0.9, 0.82)))
+	v.add_child(_label("Downswing speed on screen. Slower is easier to time; real speed is the full challenge.", 21, Color(0.8, 0.9, 0.82)))
 	v.get_child(1).autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	var row := HBoxContainer.new()
 	v.add_child(row)
@@ -365,7 +376,42 @@ func _build_settings() -> void:
 	tempo_label = _label(tempo_text(0.55), 24)
 	tempo_label.custom_minimum_size = Vector2(150, 0)
 	row.add_child(tempo_label)
-	var how := _label("How to swing: hold your thumb on the golfer to swing back (hold longer = longer swing = more distance). Let go to start down: your arms pull the club with the wrists cocked (lag). Tap to release the club. Release on time for full speed and a square face. Early = the club flips: higher, closed face, pulls and hooks. Late = still lagging: lower, open face, pushes and slices. No tap = your wrists give way late on their own. Draw/Fade sets your stance and path.", 22, Color(0.8, 0.9, 0.82))
+	v.add_child(_label("Controls", 28))
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 10)
+	v.add_child(grid)
+	var group := ButtonGroup.new()
+	for i in SwingControls.NAMES.size():
+		var b := Button.new()
+		b.text = SwingControls.NAMES[i]
+		b.toggle_mode = true
+		b.button_group = group
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.custom_minimum_size = Vector2(0, 64)
+		var idx := i
+		b.pressed.connect(func():
+			scheme_desc.text = SwingControls.DESCRIPTIONS[idx]
+			controls_changed.emit(idx))
+		grid.add_child(b)
+		scheme_buttons.append(b)
+	var pressed_style := StyleBoxFlat.new()
+	pressed_style.bg_color = Color(0.25, 0.55, 0.35, 0.95)
+	pressed_style.set_corner_radius_all(14)
+	pressed_style.set_content_margin_all(12)
+	for b in scheme_buttons:
+		b.add_theme_stylebox_override("pressed", pressed_style)
+		b.add_theme_stylebox_override("hover_pressed", pressed_style)
+	scheme_desc = _label("", 22, Color(0.8, 0.9, 0.82))
+	scheme_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	v.add_child(scheme_desc)
+	mark_check = CheckButton.new()
+	mark_check.text = "Show release line (green)"
+	mark_check.button_pressed = true
+	mark_check.toggled.connect(func(on): mark_toggled.emit(on))
+	v.add_child(mark_check)
+	var how := _label("Release on time for full speed and a square face. Early: the club flips past your hands (higher, closed face, pulls and hooks). Late: still lagging (lower, open face, pushes and slices). No release: your wrists give way late on their own.", 21, Color(0.8, 0.9, 0.82))
 	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	v.add_child(how)
 	var reset := Button.new()
@@ -438,6 +484,12 @@ func set_club(club: Dictionary, stock_carry: float, traj: float) -> void:
 	club_label.text = club["name"]
 	club_sub.text = "Full swing carries ~%d m (no wind)" % roundi(stock_carry)
 	traj_label.text = "Stock" if absf(traj) < 0.01 else ("High %+.2f" % traj if traj > 0 else "Low %.2f" % traj)
+
+
+func set_controls(scheme: int, show_mark: bool) -> void:
+	scheme_buttons[scheme].button_pressed = true
+	scheme_desc.text = SwingControls.DESCRIPTIONS[scheme]
+	mark_check.set_pressed_no_signal(show_mark)
 
 
 func set_aiming_visible(v: bool) -> void:

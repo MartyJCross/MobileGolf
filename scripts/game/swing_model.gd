@@ -91,11 +91,15 @@ var w_club := 0.0
 var released := false # wrists unlocked (by a tap, or giving way)
 var tapped := false # player fired the release
 var tap_t := -1.0
+var tap_arm := 0.0 # arm angle when the player released (for feedback)
 var sim_t := 0.0 # downswing time (physical)
 var release_t := -1.0
 var top := 0.0
 var cock_at_top := 0.0
 var hold_t := 0.0
+var auto_backswing := true # true: backswing grows with hold time; false: follows backswing_target
+var backswing_target := 0.0 # arm angle the backswing moves toward (when not auto)
+const FOLLOW_RATE := deg_to_rad(320.0) # how fast the arms follow a dragged target, rad/s
 var follow_t := 0.0
 var result: Result = null
 
@@ -121,6 +125,42 @@ func reset() -> void:
 
 
 # ------------------------------------------------------------------ controls
+# Low-level actions; the control schemes in main.gd map touches onto them.
+
+func begin_backswing(auto := true) -> void:
+	if state != State.IDLE:
+		return
+	state = State.BACKSWING
+	hold_t = 0.0
+	auto_backswing = auto
+	backswing_target = 0.0
+
+
+## Backswing length as a fraction of a full swing (over 1.0 = over-swing).
+func set_backswing_target(frac: float) -> void:
+	backswing_target = clampf(frac, 0.0, MAX_TOP / FULL_TOP) * FULL_TOP
+
+
+## Start the downswing from wherever the arms are. Returns false (and
+## cancels) if the club has barely moved.
+func start_downswing() -> bool:
+	if state != State.BACKSWING:
+		return false
+	if arm > deg_to_rad(-20.0):
+		reset()
+		return false
+	_start_down()
+	return true
+
+
+func release_club() -> void:
+	if state == State.DOWNSWING and not tapped:
+		tap_t = sim_t
+		tap_arm = arm
+		tapped = true
+		if not released:
+			_release()
+
 
 func press() -> void:
 	if state == State.IDLE:
@@ -146,7 +186,10 @@ func update(real_dt: float) -> void:
 	match state:
 		State.BACKSWING:
 			hold_t += real_dt
-			arm = backswing_arm(hold_t)
+			if auto_backswing:
+				arm = backswing_arm(hold_t)
+			else:
+				arm = move_toward(arm, backswing_target, FOLLOW_RATE * real_dt)
 			club = arm + cock_for(arm)
 		State.DOWNSWING:
 			var target := sim_t + real_dt * time_scale
@@ -398,28 +441,58 @@ static func _speed_at(top_angle: float, cock: float, t: float) -> float:
 ## Each entry: Vector4(top angle, best tap time, lag at impact, head radius).
 const TABLE_STEP := deg_to_rad(10.0)
 static var _table: Array = []
+static var _release_arms: Array = [] # arm angle at the perfect release, per table entry
 static var _ref_cache := -1.0
 static var _table_mutex := Mutex.new()
 
 
 static func build_table() -> void:
 	var t: Array = []
+	var ra: Array = []
 	var a := deg_to_rad(-30.0)
 	while a >= MAX_TOP - 0.001:
 		var cock := cock_for(a)
 		var best := optimal_release_time(a, cock)
 		var m := simulate(a, cock, best)
 		t.append(Vector4(a, best, m.club - m.arm, m.head().length()))
+		ra.append(_arm_at_time(a, cock, best))
 		a -= TABLE_STEP
 	var full := simulate(FULL_TOP, MAX_COCK, optimal_release_time(FULL_TOP, MAX_COCK)).v_raw
 	_table_mutex.lock()
 	_table = t
+	_release_arms = ra
 	_ref_cache = full
 	_table_mutex.unlock()
 
 
 static func table_ready() -> bool:
 	return not _table.is_empty()
+
+
+## Arm angle after `t` seconds of downswing with the wrists still locked.
+static func _arm_at_time(top_angle: float, cock: float, t: float) -> float:
+	var m := SwingModel.new()
+	m.analysis = true
+	m.arm = top_angle
+	m.club = top_angle + cock
+	m._start_down()
+	while m.sim_t < t and m.state == State.DOWNSWING:
+		m._step()
+	return m.arm
+
+
+## Where the hands should be when you release (arm angle), for a top angle.
+static func ideal_release_arm(top_angle: float) -> float:
+	if _table.is_empty():
+		build_table()
+	var t := _table
+	if top_angle >= t[0].x:
+		return _release_arms[0]
+	for i in t.size() - 1:
+		if top_angle <= t[i].x and top_angle >= t[i + 1].x:
+			var f: float = (top_angle - t[i].x) / (t[i + 1].x - t[i].x)
+			return lerpf(_release_arms[i], _release_arms[i + 1], f)
+	return _release_arms[_release_arms.size() - 1]
 
 
 ## Vector3(best tap time, ideal lag, head radius) for a given top angle.

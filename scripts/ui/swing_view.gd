@@ -1,13 +1,17 @@
 class_name SwingView
 extends Control
 ## Face-on view of the golfer, drawn from the SwingModel every frame.
-## Target is to the left (as on TV, right-handed golfer). Touch anywhere in
-## this panel: hold = backswing, let go = downswing, tap = release.
+## Target is to the left (as on TV, right-handed golfer). Touches are passed
+## to SwingControls, which maps them for the chosen control scheme.
+## The release mark shows where the hands are at the perfect release for the
+## current backswing (from the physics); after a swing, a second marker
+## shows where you actually released.
 
-signal pressed
-signal released
+signal touch(kind: int, pos: Vector2)
 
 var model: SwingModel
+var controls: SwingControls
+var show_mark := true
 var feedback := "" # shown after a swing
 var _trail: Array[Vector2] = [] # recent clubhead positions (metres, model space)
 const TRAIL_MAX := 40
@@ -15,10 +19,10 @@ const TRAIL_MAX := 40
 
 func _gui_input(e: InputEvent) -> void:
 	if e is InputEventScreenTouch and e.index == 0:
-		if e.pressed:
-			pressed.emit()
-		else:
-			released.emit()
+		touch.emit(SwingControls.DOWN if e.pressed else SwingControls.UP, e.position)
+		accept_event()
+	elif e is InputEventScreenDrag and e.index == 0:
+		touch.emit(SwingControls.MOVE, e.position)
 		accept_event()
 
 
@@ -85,6 +89,8 @@ func _draw() -> void:
 	var lead_sh := hub + Vector2(-sh_w * s, 0) # lead (left) shoulder, target side
 	var trail_sh := hub + Vector2(sh_w * s, 0)
 
+	_draw_release_mark()
+
 	# Arms and club from the model.
 	var hands := _px(model.hands())
 	var head := _px(model.head())
@@ -105,25 +111,62 @@ func _draw() -> void:
 	_draw_text(ground_y)
 
 
+## Glowing arc on the hands' path at the perfect release point, sized to
+## about +/-10 ms of on-screen time. Shown from the start of the backswing
+## (for the backswing so far) through the downswing.
+func _draw_release_mark() -> void:
+	var st := model.state
+	var top := 0.0
+	match st:
+		SwingModel.State.BACKSWING:
+			top = minf(model.arm, deg_to_rad(-40.0))
+		SwingModel.State.DOWNSWING, SwingModel.State.FOLLOW, SwingModel.State.DONE:
+			top = model.top
+		_:
+			return
+	if not show_mark and st != SwingModel.State.FOLLOW and st != SwingModel.State.DONE:
+		return
+	if not SwingModel.table_ready():
+		return
+	var ra := SwingModel.ideal_release_arm(top)
+	var sc := _scale()
+	# Faint track of the hands' path from the top down to the ball.
+	var track := PackedVector2Array()
+	var steps := 24
+	for i in steps + 1:
+		var a := lerpf(top, 0.0, float(i) / steps)
+		track.append(_px(Vector2(sin(a), -cos(a)) * SwingModel.L_ARM))
+	draw_polyline(track, Color(1, 1, 1, 0.13), 0.09 * sc, true)
+	# The gate: a bold line across the track where the hands should be when
+	# you release.
+	var dir := Vector2(sin(ra), -cos(ra))
+	var g0 := _px(dir * (SwingModel.L_ARM - 0.16))
+	var g1 := _px(dir * (SwingModel.L_ARM + 0.16))
+	var glow := 0.6 + 0.4 * sin(Time.get_ticks_msec() * 0.014) if st == SwingModel.State.DOWNSWING else 0.8
+	draw_line(g0, g1, Color(0.4, 1.0, 0.45, 0.35 * glow), 0.13 * sc, true)
+	draw_line(g0, g1, Color(0.55, 1.0, 0.55, glow), 0.045 * sc, true)
+	# After the swing: where you actually released.
+	if (st == SwingModel.State.FOLLOW or st == SwingModel.State.DONE) and model.tapped:
+		var tp := _px(Vector2(sin(model.tap_arm), -cos(model.tap_arm)) * SwingModel.L_ARM)
+		draw_circle(tp, 11.0, Color(1.0, 0.5, 0.3, 0.95))
+		draw_circle(tp, 5.0, Color(1, 1, 1))
+
+
 func _draw_text(ground_y: float) -> void:
 	var f := get_theme_default_font()
 	var msg := ""
 	var sub := ""
-	match model.state:
-		SwingModel.State.IDLE:
-			msg = "Hold to swing back"
-			sub = feedback if feedback != "" else "Let go to swing down · tap to release the club"
-		SwingModel.State.BACKSWING:
-			var pct := roundi(model.backswing_fraction() * 100.0)
-			msg = "Backswing %d%%" % pct
-			if pct > 100:
-				msg += "  (over-swing!)"
-			sub = "Let go to start down"
-		SwingModel.State.DOWNSWING:
-			msg = "Tap to release!"
-		_:
-			msg = ""
-			sub = feedback
+	if model.state == SwingModel.State.IDLE or model.state == SwingModel.State.BACKSWING or model.state == SwingModel.State.DOWNSWING:
+		var h: Array = controls.hint() if controls else ["", ""]
+		msg = h[0]
+		sub = h[1]
+		if model.state == SwingModel.State.IDLE:
+			if controls and controls.cancelled_hint != "":
+				sub = controls.cancelled_hint
+			elif feedback != "":
+				sub = feedback
+	else:
+		sub = feedback
 	if msg != "":
 		_centered(f, msg, 30, 34.0, Color(1, 1, 1, 0.95))
 	if sub != "":
