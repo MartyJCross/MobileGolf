@@ -5,7 +5,7 @@ extends SceneTree
 const FILES := [
 	"res://tests/test_physics.gd",
 	"res://tests/test_course.gd",
-	"res://tests/test_swing.gd",
+	"res://tests/test_swipe.gd",
 ]
 
 

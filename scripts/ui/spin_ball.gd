@@ -9,6 +9,7 @@ extends Control
 signal changed(value: Vector2) # x: curve -1..1, y: spin -1 (runner) .. +1 (max back)
 
 var value := Vector2.ZERO
+var vertical_only := false # backspin only (curve comes from the swing)
 var _last_tap := 0
 
 
@@ -35,7 +36,7 @@ func _set_from(p: Vector2) -> void:
 	if v.length() > 1.0:
 		v = v.normalized()
 	# Snap near the middle and the axes so "straight" is easy to pick.
-	if absf(v.x) < 0.08:
+	if absf(v.x) < 0.08 or vertical_only:
 		v.x = 0.0
 	if absf(v.y) < 0.08:
 		v.y = 0.0
@@ -64,8 +65,9 @@ func _draw() -> void:
 	draw_circle(dot, 6, Color(1, 1, 1))
 	_label(f, "Runner", c + Vector2(0, -r - 6), true)
 	_label(f, "Spin", c + Vector2(0, r + 20), true)
-	_label(f, "Draw", c + Vector2(-r * 0.62, -8), true, false, Color(0.35, 0.35, 0.35))
-	_label(f, "Fade", c + Vector2(r * 0.62, -8), true, false, Color(0.35, 0.35, 0.35))
+	if not vertical_only:
+		_label(f, "Draw", c + Vector2(-r * 0.62, -8), true, false, Color(0.35, 0.35, 0.35))
+		_label(f, "Fade", c + Vector2(r * 0.62, -8), true, false, Color(0.35, 0.35, 0.35))
 
 
 func _label(f: Font, t: String, at: Vector2, centered: bool, right_align := false, inside := Color(0, 0, 0, 0)) -> void:

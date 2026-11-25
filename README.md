@@ -10,22 +10,19 @@ average is saved on the phone.
 
 ## How to play
 
-The skill is seeing the shot.
-
-1. **Drag on the course** to move your landing spot (the ring). Use **Map** for a top-down view.
-   The arc shows the planned flight, wind included: white is clear, **red hits something**.
-   The little side-on view above HIT shows the height, so you can see if you'll clear a tree
-   or fit under its branches.
-2. **Pick a wedge**: 50°, 55° or 60° (they carry about 100 / 88 / 76 m at full power;
-   the game sets the power for your landing spot).
-3. **Pick a height**: Punch (low, runs out, goes under branches), Normal, High, Flop
-   (very high, lands soft, goes over trees).
-4. **Drag the dot on the ball** for spin: down = more backspin (checks, can spin back),
-   up = a runner that releases, left/right = draw/fade to curve around things.
-5. Think about where it goes **after** it lands (slopes, tiers, firmness, spin), then **HIT**.
-   Stop the needle in the green zone for a pure strike (it can be turned off in Settings).
-
-Settings also has a **pro mode**: the preview plans for still air and you read the wind yourself.
+1. **Aim:** drag left/right on the course. The ring shows where a full swing lands
+   (still air); **Map** gives a top-down view.
+2. **Pick a wedge** (50°, 55°, 60°: about 100 / 88 / 76 m full), a **height**
+   (Punch runs low under branches, Flop goes high over trees) and **backspin** on the
+   little ball (down = more spin, up = a runner).
+3. **Swing** in the lower half of the screen: put your thumb down, **pull down** to swing
+   back (how far you pull = power; the ring slides to where that power lands), then
+   **swipe up through the ball**. Swipe speed doesn't matter.
+4. **Shape it with your thumb:** straight back and straight through goes straight.
+   Swipe through to the right of your backswing line to open the face (fade), to the
+   left to close it (draw). Pull back at an angle and come through on the same line to
+   push or pull it without curve.
+5. Think about wind, slopes, firmness and spin: where it goes after it lands is the game.
 
 ## How a hole is made
 

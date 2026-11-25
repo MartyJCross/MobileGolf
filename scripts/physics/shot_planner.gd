@@ -135,3 +135,53 @@ static func solve(terrain: GolfTerrain, start: Vector3, target: Vector3, shot: S
 	p.block_pos = prev.first_hit_pos
 	p.apex = prev.apex
 	return p
+
+
+# ------------------------------------------------------------- power <-> carry
+# For the swipe swing: "power" is the fraction of a full swing's carry, so
+# 50% power flies half as far. Each club/height/spin gets a small table of
+# still-air carry vs swing speed, built once from the flight model.
+
+const TABLE_SPEEDS := [0.12, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.08]
+static var _carry_tables := {}
+
+
+static func carry_table(shot: Shot) -> PackedFloat32Array:
+	var key := "%d:%d:%.1f" % [shot.club_idx, shot.height_idx, shot.spin]
+	if _carry_tables.has(key):
+		return _carry_tables[key]
+	var t := PackedFloat32Array()
+	var flat := GolfTerrain.new()
+	for s in TABLE_SPEEDS:
+		var sim := _fly(flat, Vector3(0, BallSim.RADIUS, 0), shot, s, 0.0, false, false)
+		t.append(sim.carry_distance())
+	_carry_tables[key] = t
+	return t
+
+
+## Still-air carry of a full (100%) swing with this shot.
+static func full_carry(shot: Shot) -> float:
+	return carry_table(shot)[TABLE_SPEEDS.find(1.0)]
+
+
+## Swing speed that carries `power` x the full-swing carry.
+static func speed_for_power(shot: Shot, power: float) -> float:
+	var t := carry_table(shot)
+	var want := power * full_carry(shot)
+	if want <= t[0]:
+		return TABLE_SPEEDS[0]
+	for i in t.size() - 1:
+		if want <= t[i + 1]:
+			var f: float = (want - t[i]) / maxf(t[i + 1] - t[i], 1e-4)
+			return lerpf(TABLE_SPEEDS[i], TABLE_SPEEDS[i + 1], f)
+	return TABLE_SPEEDS[TABLE_SPEEDS.size() - 1]
+
+
+## Inverse of speed_for_power.
+static func power_for_speed(shot: Shot, speed: float) -> float:
+	var t := carry_table(shot)
+	for i in TABLE_SPEEDS.size() - 1:
+		if speed <= TABLE_SPEEDS[i + 1]:
+			var f: float = (speed - TABLE_SPEEDS[i]) / (TABLE_SPEEDS[i + 1] - TABLE_SPEEDS[i])
+			return lerpf(t[i], t[i + 1], clampf(f, 0.0, 1.0)) / full_carry(shot)
+	return t[t.size() - 1] / full_carry(shot)

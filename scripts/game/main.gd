@@ -1,22 +1,18 @@
 extends Node3D
-## Game controller: holes, shot planning, hitting, playback, cameras, results.
+## Game controller: holes, aiming, the pull-back-and-swipe swing, playback,
+## cameras, results.
 ##
-## The skill is seeing the shot: you drag a landing spot onto the course,
-## pick a wedge, a height and spin/curve, and the ShotPlanner shows the
-## flight, wind included (white = clear, red = hits something). Slopes,
-## green firmness and how the ball releases or checks after landing are
-## yours to read (and the wind too, in the "still air" pro setting). HIT has
-## a forgiving accuracy needle.
+## Aim by dragging left/right on the course. Pick a wedge, a height and
+## backspin. Swing in the swing zone: pull down (how far = power; the ring
+## slides to where that power lands in still air), then swipe up through
+## the ball. The two swipe directions set the club path and face, so you
+## shape draws, fades, pushes and pulls with your thumb.
 
 enum State { LOADING, AIMING, FLYING, RESULT }
 
 const CAM_FOV := 55.0
 const BALL_VISUAL_SCALE := 0.004 # ball drawn at least this fraction of camera distance
-const PLAN_INTERVAL := 0.06 # seconds between re-plans while dragging
-const MAX_TARGET_DIST := 120.0
-const DRAG_GAIN := 0.65 # the landing spot moves a little slower than your thumb, for fine placement
-const ERR_YAW_DEG := 1.8 # full needle miss: start direction error
-const ERR_SPEED := 0.035 # full needle miss: speed error
+const AIM_GAIN := 0.045 # degrees of aim per pixel dragged
 
 var state: int = State.LOADING
 var stats := Stats.new()
@@ -29,22 +25,17 @@ var course: CourseView
 var cam: Camera3D
 var ball: MeshInstance3D
 var tracer: Tracer
-var aim_line: Tracer # planned flight (clear part)
-var block_line: Tracer # planned flight after it hits something
+var aim_line: Tracer # aim line on the ground (and result line)
 var carry_ring: MeshInstance3D
-var block_marker: MeshInstance3D
 var hud: Hud
 
 var shot := ShotPlanner.Shot.new()
-var target := Vector3.ZERO
-var plan: ShotPlanner.Plan
-var _plan_dirty := true
-var _plan_wait := 0.0
+var aim_yaw := 0.0 # degrees, + right of straight down -Z
+var swipe := SwipeSwing.new()
+var last_swing: SwipeSwing.Result
 
 var sim: BallSim
 var last_launch: LaunchModel.Result
-var last_error := 0.0
-var last_target := Vector3.ZERO
 var play_t := 0.0
 var play_speed := 1.0
 var ball_start := Vector3.ZERO
@@ -66,9 +57,8 @@ func _ready() -> void:
 	if _auto.has("seed"):
 		stats.base_seed = int(_auto["seed"])
 		stats.hole_number = 1
-	hud.hit_button.meter_on = stats.meter
-	hud.meter_check.set_pressed_no_signal(stats.meter)
-	hud.still_air_check.set_pressed_no_signal(not stats.plan_wind)
+	swipe.screen_h = get_viewport().get_visible_rect().size.y
+	hud.swing_overlay.swing = swipe
 	hud.set_stats(stats)
 	_load_hole(stats.hole_number)
 	if not _auto.is_empty():
@@ -139,11 +129,6 @@ func _build_world() -> void:
 	aim_line.color = Color(1, 1, 1)
 	aim_line.pixel_width = 0.003
 	add_child(aim_line)
-	block_line = Tracer.new()
-	block_line.color = Color(1.0, 0.3, 0.25)
-	block_line.pixel_width = 0.003
-	add_child(block_line)
-
 	carry_ring = MeshInstance3D.new()
 	var torus := TorusMesh.new()
 	torus.inner_radius = 0.8
@@ -160,20 +145,6 @@ func _build_world() -> void:
 	carry_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(carry_ring)
 
-	block_marker = MeshInstance3D.new()
-	var bs := SphereMesh.new()
-	bs.radius = 1.0
-	bs.height = 2.0
-	block_marker.mesh = bs
-	var bmm := StandardMaterial3D.new()
-	bmm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	bmm.albedo_color = Color(1.0, 0.2, 0.15, 0.85)
-	bmm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	bmm.no_depth_test = true
-	block_marker.material_override = bmm
-	block_marker.visible = false
-	add_child(block_marker)
-
 	cam = Camera3D.new()
 	cam.fov = CAM_FOV
 	cam.far = 1500.0
@@ -183,26 +154,15 @@ func _build_world() -> void:
 
 	hud = Hud.new()
 	add_child(hud)
-	hud.target_drag.connect(_on_target_drag)
+	hud.aim_drag.connect(_on_aim_drag)
+	hud.swing_touch.connect(_on_swing_touch)
 	hud.view_tapped.connect(_on_view_tapped)
-	hud.club_selected.connect(func(i): shot.club_idx = i; _replan(true))
-	hud.height_selected.connect(func(i): shot.height_idx = i; _replan(true))
-	hud.spin_changed.connect(func(v: Vector2):
-		shot.curve = v.x
-		shot.spin = v.y
-		_replan(false))
-	hud.hit_pressed.connect(_on_hit)
+	hud.club_selected.connect(func(i): shot.club_idx = i; _refresh_shot())
+	hud.height_selected.connect(func(i): shot.height_idx = i; _refresh_shot())
+	hud.spin_changed.connect(func(v: Vector2): shot.spin = snappedf(v.y, 0.1); _refresh_shot())
 	hud.next_pressed.connect(_on_next)
 	hud.retry_pressed.connect(_on_retry)
 	hud.map_toggled.connect(func(): map_view = not map_view; _snap_camera())
-	hud.meter_toggled.connect(func(on):
-		stats.meter = on
-		hud.hit_button.meter_on = on
-		stats.save_stats())
-	hud.still_air_toggled.connect(func(on):
-		stats.plan_wind = not on
-		stats.save_stats()
-		_replan(true))
 	hud.reset_stats_pressed.connect(func():
 		stats.reset()
 		hud.set_stats(stats))
@@ -256,74 +216,47 @@ func _prefetch(n: int) -> void:
 func _reset_ball() -> void:
 	ball_start = hole.tee + Vector3(0, BallSim.RADIUS + 0.012, 0) # teed up
 	ball.position = ball_start
-	target = hole.pin
-	plan = null
+	aim_yaw = ShotPlanner.bearing(ball_start, hole.pin)
+	swipe.reset()
 	tracer.clear()
 
 
 func _enter_aiming() -> void:
 	state = State.AIMING
 	map_view = false
+	swipe.reset()
 	hud.hide_result()
 	hud.set_shot_visible(true)
 	hud.set_selection(shot.club_idx, shot.height_idx)
-	hud.set_hole_info(hole_no, hole, _aim_yaw())
+	hud.set_hole_info(hole_no, hole, aim_yaw)
 	hud.set_stats(stats)
-	_replan(true)
-	_update_plan_now()
+	aim_line.color = Color(1, 1, 1)
+	_refresh_shot()
 	_snap_camera()
 
 
 # ------------------------------------------------------------------ input
 
-## Drag on the course: the landing spot moves with your thumb (relative, so
-## your thumb never covers it).
-func _on_target_drag(pos: Vector2, rel: Vector2) -> void:
+func _on_aim_drag(dx: float) -> void:
 	if state != State.AIMING or hud.settings_panel.visible:
 		return
-	var a = _ground_at(pos - rel)
-	var b = _ground_at(pos)
-	if a == null or b == null:
-		return
-	var d: Vector3 = (b - a) * DRAG_GAIN
-	var t := target + Vector3(d.x, 0, d.z)
-	var off := Vector2(t.x - ball_start.x, t.z - ball_start.z)
-	if off.length() > MAX_TARGET_DIST:
-		off = off.normalized() * MAX_TARGET_DIST
-	t = Vector3(ball_start.x + off.x, 0, ball_start.z + off.y)
-	if hole.is_out_of_bounds(t.x, t.z):
-		return
-	t.y = hole.get_contact_height(t.x, t.z)
-	target = t
-	_replan(false)
+	var gain := AIM_GAIN * (0.5 if map_view else 1.0)
+	aim_yaw = wrapf(aim_yaw + dx * gain, -180.0, 180.0)
+	hud.update_wind(hole, aim_yaw)
 
 
-## Where a screen point's ray meets the ground (null if it doesn't).
-func _ground_at(screen: Vector2):
-	var o := cam.project_ray_origin(screen)
-	var dir := cam.project_ray_normal(screen)
-	var t := 0.0
-	var prev_t := 0.0
-	for i in 400:
-		var p := o + dir * t
-		var h := hole.get_height(p.x, p.z)
-		if p.y <= h:
-			# Refine between prev_t and t.
-			var lo := prev_t
-			var hi := t
-			for k in 12:
-				var mid := (lo + hi) * 0.5
-				var q := o + dir * mid
-				if q.y <= hole.get_height(q.x, q.z):
-					hi = mid
-				else:
-					lo = mid
-			return o + dir * hi
-		prev_t = t
-		t += maxf(0.25, (p.y - h) * 0.5)
-		if t > 3000.0:
-			break
-	return null
+func _on_swing_touch(kind: int, pos: Vector2) -> void:
+	if state != State.AIMING or hud.settings_panel.visible:
+		return
+	match kind:
+		0:
+			swipe.touch_down(pos)
+		1:
+			swipe.touch_move(pos)
+		2:
+			swipe.touch_up(pos)
+	if swipe.state == SwipeSwing.State.DONE:
+		_hit(swipe.result)
 
 
 func _on_view_tapped() -> void:
@@ -342,96 +275,63 @@ func _on_next() -> void:
 func _on_retry() -> void:
 	if state != State.RESULT:
 		return
+	var keep := aim_yaw
 	_reset_ball()
-	target = last_target
+	aim_yaw = keep
 	_enter_aiming()
 
 
-# ------------------------------------------------------------------ planning
-
-func _replan(reset_warm: bool) -> void:
-	_plan_dirty = true
-	if reset_warm:
-		plan = null
-
-
-func _update_plan_now() -> void:
+func _refresh_shot() -> void:
 	if hole == null:
 		return
-	plan = ShotPlanner.solve(hole, ball_start, target, shot, plan, stats.plan_wind)
-	_plan_dirty = false
-	_plan_wait = PLAN_INTERVAL
-	_draw_plan()
+	var full := ShotPlanner.full_carry(shot)
+	hud.shot_info.text = "Full swing %d m  ·  %s  ·  %s" % [roundi(full), ShotPlanner.HEIGHTS[shot.height_idx]["name"], SpinBall.describe(Vector2(0, shot.spin))]
+	hud.update_wind(hole, aim_yaw)
 
 
-func _draw_plan() -> void:
-	if plan == null:
-		return
-	aim_line.set_points(plan.path)
-	if plan.blocked:
-		# Continue the flight in red from where it hits.
-		var red := PackedVector3Array()
-		var started := false
-		for p in plan.clear_path:
-			if not started and p.distance_to(plan.block_pos) < 1.5:
-				started = true
-			if started:
-				red.append(p)
-		if red.size() < 2:
-			red = PackedVector3Array([plan.block_pos, plan.landing])
-		block_line.set_points(red)
-		block_marker.position = plan.block_pos
-		block_marker.visible = true
-	else:
-		block_line.clear()
-		block_marker.visible = false
-	hud.profile.show_plan(hole, plan, ball_start)
-	var info := "Carry %d m · Peak %d m · %s" % [roundi(Vector2(plan.landing.x - ball_start.x, plan.landing.z - ball_start.z).length()), roundi(plan.apex), SpinBall.describe(Vector2(shot.curve, shot.spin))]
-	if plan.too_far:
-		info = "Too far for the %s: pick a stronger wedge or lower shot" % Clubs.get_club(shot.club_idx)["name"]
-	elif plan.too_short:
-		info = "Too short to plan with this club"
-	elif plan.blocked:
-		info += "\nBlocked! Go over, under or around it"
-	hud.shot_info.text = info
-	hud.update_wind(hole, _aim_yaw())
-
-
-func _aim_yaw() -> float:
-	return ShotPlanner.bearing(ball_start, target)
+func _aim_dir() -> Vector3:
+	return LaunchModel.dir_from(aim_yaw, 0.0)
 
 
 # ------------------------------------------------------------------ shot
 
-func _on_hit(err: float) -> void:
-	if state != State.AIMING:
-		return
-	if _plan_dirty or plan == null:
-		_update_plan_now()
-	if plan.too_far:
-		hud.show_toast("Too far: pick a stronger wedge or a lower shot")
-		get_tree().create_timer(1.5).timeout.connect(func(): hud.show_toast(""))
-		return
-	last_error = err
-	last_target = target
-	var s := plan.speed_frac * (1.0 + ERR_SPEED * err)
-	var yaw := plan.yaw_deg + ERR_YAW_DEG * err
-	var lv := ShotPlanner.launch_vectors(shot, s, yaw)
-	last_launch = lv[2]
+func _hit(r: SwipeSwing.Result) -> void:
+	last_swing = r
+	var speed := ShotPlanner.speed_for_power(shot, r.power)
+	var sw := ShotPlanner.make_swing(shot, speed)
+	sw.path_deg = r.path_deg
+	sw.face_to_path_deg = r.face_to_path_deg
+	last_launch = LaunchModel.compute(Clubs.get_club(shot.club_idx), sw)
+	var yaw := -deg_to_rad(aim_yaw)
 	sim = BallSim.new(hole)
 	sim.rng.seed = randi()
-	sim.launch(ball_start, lv[0], lv[1])
+	sim.launch(ball_start, last_launch.velocity.rotated(Vector3.UP, yaw), last_launch.spin.rotated(Vector3.UP, yaw))
 	sim.simulate()
+	hud.swing_overlay.feedback = _swing_text(r)
 	play_t = 0.0
 	play_speed = 1.0
 	state = State.FLYING
 	hud.set_shot_visible(false)
 	aim_line.clear()
-	block_line.clear()
 	carry_ring.visible = false
-	block_marker.visible = false
 	hud.pin_marker.visible = false
 	Input.vibrate_handheld(25)
+
+
+func _swing_text(r: SwipeSwing.Result) -> String:
+	return "Last: power %d%%  ·  path %s  ·  face %s" % [roundi(r.power * 100.0), _lr(r.path_deg), _ftp_text(r.face_to_path_deg)]
+
+
+func _lr(v: float) -> String:
+	if absf(v) < 0.3:
+		return "straight"
+	return "%.1f° %s" % [absf(v), "right" if v > 0 else "left"]
+
+
+func _ftp_text(v: float) -> String:
+	if absf(v) < 0.3:
+		return "square"
+	return "%.1f° %s" % [absf(v), "open (fade)" if v > 0 else "closed (draw)"]
 
 
 func _finish_shot() -> void:
@@ -495,10 +395,9 @@ func _miss_text(p: Vector3) -> String:
 func _shot_report() -> String:
 	var l := last_launch
 	var mph := 1.0 / Clubs.MPH
+	var r := last_swing
 	var lines: Array[String] = []
-	var land_miss := Vector2(sim.carry_pos.x - last_target.x, sim.carry_pos.z - last_target.z).length()
-	var strike := "Pure strike" if absf(last_error) < 0.01 else ("Pushed a touch" if last_error > 0 else "Pulled a touch")
-	lines.append("Landed %.1f m from your spot  ·  %s" % [land_miss, strike])
+	lines.append("Power %d%%  ·  Path %s  ·  Face %s" % [roundi(r.power * 100.0), _lr(r.path_deg), _ftp_text(r.face_to_path_deg)])
 	if sim.hit_tree:
 		lines.append("Clipped an obstacle!")
 	var roll := sim.total_distance() - sim.carry_distance()
@@ -513,9 +412,6 @@ func _shot_report() -> String:
 func _process(delta: float) -> void:
 	match state:
 		State.AIMING:
-			_plan_wait -= delta
-			if _plan_dirty and _plan_wait <= 0.0:
-				_update_plan_now()
 			_update_camera(delta)
 			_update_aim_visuals()
 		State.FLYING:
@@ -526,7 +422,6 @@ func _process(delta: float) -> void:
 	_update_ball_scale()
 	if state == State.AIMING:
 		aim_line.redraw()
-		block_line.redraw()
 	if state == State.FLYING or state == State.RESULT:
 		tracer.redraw()
 	if state == State.RESULT:
@@ -563,19 +458,27 @@ func _update_ball_scale() -> void:
 func _update_aim_visuals() -> void:
 	if hole == null:
 		return
-	var p := target
+	# Ring: where the current pull (or a full swing) lands in still air.
+	var power := swipe.power() if swipe.state == SwipeSwing.State.BACK or swipe.state == SwipeSwing.State.FORWARD else 1.0
+	var carry := ShotPlanner.full_carry(shot) * power
+	var fwd := _aim_dir()
+	var p := ball_start + fwd * carry
 	p.y = hole.get_contact_height(p.x, p.z) + 0.05
 	carry_ring.position = p
 	var ring_scale := clampf(cam.global_position.distance_to(p) * 0.03, 1.0, 5.0)
 	carry_ring.scale = Vector3(ring_scale, 0.25, ring_scale)
 	carry_ring.visible = true
-	if block_marker.visible:
-		block_marker.scale = Vector3.ONE * clampf(cam.global_position.distance_to(block_marker.position) * 0.012, 0.3, 1.5)
+	var pts := PackedVector3Array()
+	var steps := int(carry / 1.5)
+	for k in range(1, steps):
+		var q := ball_start + fwd * (k * 1.5)
+		q.y = hole.get_contact_height(q.x, q.z) + 0.08
+		pts.append(q)
+	aim_line.set_points(pts)
 	var pin_top := hole.pin + Vector3(0, 2.4, 0)
 	var dist := Vector2(hole.pin.x - ball_start.x, hole.pin.z - ball_start.z).length()
 	hud.place_marker(hud.pin_marker, cam, pin_top, "Pin %d m" % roundi(dist), 6.0)
-	var td := Vector2(target.x - ball_start.x, target.z - ball_start.z).length()
-	hud.place_marker(hud.target_marker, cam, p, "%d m" % roundi(td), -44.0)
+	hud.place_marker(hud.target_marker, cam, p, "%d m" % roundi(carry), -44.0)
 	if hud.target_marker.get_rect().intersects(hud.pin_marker.get_rect()):
 		hud.target_marker.position.y = hud.pin_marker.position.y + hud.pin_marker.size.y
 
@@ -611,7 +514,7 @@ func _camera_target() -> Transform3D:
 			if map_view:
 				# Top-down, tee at the bottom, green at the top; the shot panel
 				# covers the bottom third, so shift the view down a little.
-				var center := (hole.tee + hole.green_center3()) * 0.5 - line * (hole.distance * 0.18)
+				var center := (hole.tee + hole.green_center3()) * 0.5 - line * (hole.distance * 0.22)
 				return Transform3D(Basis.looking_at(Vector3.DOWN, line), center + Vector3(0, 300, 0))
 			return _aim_cam(line)
 		State.FLYING:
@@ -637,18 +540,17 @@ func _camera_target() -> Transform3D:
 	return cam.global_transform
 
 
-## High behind the tee, looking down over the obstacles, framed so the whole
-## planned flight sits in the band between the info bar and the shot panel.
-func _aim_cam(line: Vector3) -> Transform3D:
-	var d := maxf(hole.distance, Vector2(target.x - ball_start.x, target.z - ball_start.z).length())
-	var apex := plan.apex if plan != null else d * 0.2
-	var eye := ball_start - line * (9.0 + d * 0.22) + Vector3(0, 9.0 + d * 0.24 + apex * 0.4, 0)
-	var focus := ball_start + line * (d * 0.62)
-	focus.y = lerpf(ball_start.y, hole.pin.y, 0.6) + apex * 0.2
-	var basis := Basis.looking_at(focus - eye, Vector3.UP)
-	# Pitch down a little more so the focus sits ~40% from the top of the
-	# screen, above the shot panel.
-	basis = basis.rotated(basis.x, deg_to_rad(-6.0))
+## Low behind the ball looking down the aim line, like standing behind a
+## golfer; high enough to see over the near obstacles.
+func _aim_cam(_line: Vector3) -> Transform3D:
+	var fwd := _aim_dir()
+	var d := hole.distance
+	var eye := ball_start - fwd * (6.0 + d * 0.05) + Vector3(0, 3.0 + d * 0.05, 0)
+	var look := ball_start + fwd * (d * 0.75)
+	look.y = lerpf(ball_start.y, hole.pin.y, 0.75)
+	var basis := Basis.looking_at(look - eye, Vector3.UP)
+	# Tilt up a touch so the hole sits in the upper half, above the swing zone.
+	basis = basis.rotated(basis.x, deg_to_rad(4.0))
 	return Transform3D(basis, eye)
 
 
@@ -684,36 +586,28 @@ func _update_camera(delta: float) -> void:
 func _run_automation() -> void:
 	while state != State.AIMING:
 		await get_tree().process_frame
+	var power := float(_auto.get("power", "1.0"))
+	var path_px := float(_auto.get("path", "0")) # sideways offset of the pull-back, px
+	var face_px := float(_auto.get("face", "0")) # sideways offset where the swipe crosses, px
 	if _auto.has("route"):
+		# Play the generator's route: its club/height/spin, aim and power, and
+		# the face-to-path its curve needs, executed as a real swipe.
 		var r := HoleGenerator.find_route(hole)
-		if r != null:
-			shot = r
-			hud.set_selection(shot.club_idx, shot.height_idx)
-			hud.spin_ball.value = Vector2(shot.curve, shot.spin)
-			hud.spin_ball.queue_redraw()
-	if _auto.has("straight"):
-		shot = ShotPlanner.Shot.new()
-		shot.club_idx = _default_club()
-	_replan(true)
-	_update_plan_now()
+		var plan := ShotPlanner.solve(hole, ball_start, hole.pin, r)
+		shot.club_idx = r.club_idx
+		shot.height_idx = r.height_idx
+		shot.spin = r.spin
+		hud.set_selection(shot.club_idx, shot.height_idx)
+		aim_yaw = plan.yaw_deg
+		power = ShotPlanner.power_for_speed(shot, plan.speed_frac)
+		var ftp := r.curve * ShotPlanner.MAX_CURVE_DEG
+		var pull := power * SwipeSwing.PULL_FULL * swipe.screen_h
+		face_px = tan(deg_to_rad(ftp / SwipeSwing.FACE_GAIN)) * pull
+		print("ROUTE club %s %s curve %.1f power %.2f" % [Clubs.get_club(shot.club_idx)["id"], ShotPlanner.HEIGHTS[shot.height_idx]["name"], r.curve, power])
+	_refresh_shot()
 	for i in 30:
 		await get_tree().process_frame
 	_screenshot("aim")
-	print("PLAN club %s height %s spin %.1f curve %.1f power %.2f blocked %s too_far %s" % [Clubs.get_club(shot.club_idx)["id"], ShotPlanner.HEIGHTS[shot.height_idx]["name"], shot.spin, shot.curve, plan.speed_frac, plan.blocked, plan.too_far])
-	if _auto.has("drag"):
-		# Drag the landing spot through the real input path (screen pixels).
-		var xy: PackedStringArray = _auto["drag"].split(",")
-		var total := Vector2(float(xy[0]), float(xy[1]))
-		var before := target
-		var p0 := cam.unproject_position(target)
-		for i in 10:
-			hud.target_drag.emit(p0 + total * (i + 1) / 10.0, total / 10.0)
-			await get_tree().process_frame
-		_update_plan_now()
-		print("DRAG moved target %.1f m right, %.1f m further; plan blocked %s power %.2f" % [target.x - before.x, -(target.z - before.z), plan.blocked, plan.speed_frac])
-		for i in 5:
-			await get_tree().process_frame
-		_screenshot("dragged")
 	if _auto.has("map"):
 		map_view = true
 		_snap_camera()
@@ -733,7 +627,23 @@ func _run_automation() -> void:
 		if _auto.has("quit"):
 			get_tree().quit()
 		return
-	_on_hit(float(_auto.get("err", "0")))
+	# A real swipe through the HUD's swing zone.
+	var zone := hud.swing_overlay
+	var s0 := zone.position + Vector2(zone.size.x * 0.5, zone.size.y * 0.25)
+	var pull := power * SwipeSwing.PULL_FULL * swipe.screen_h
+	var top := s0 + Vector2(path_px, pull)
+	hud.swing_touch.emit(0, s0)
+	for i in 12:
+		hud.swing_touch.emit(1, s0.lerp(top, (i + 1) / 12.0))
+		await get_tree().process_frame
+	_screenshot("pulled")
+	var through := s0 + Vector2(face_px, -40.0)
+	for i in 12:
+		hud.swing_touch.emit(1, top.lerp(through, (i + 1) / 12.0))
+		if state != State.AIMING:
+			break
+	hud.swing_touch.emit(2, through)
+	print("SWING power %.2f path %.1f face-to-path %.1f" % [last_swing.power, last_swing.path_deg, last_swing.face_to_path_deg])
 	play_speed = float(_auto.get("speed", "3"))
 	while play_t < sim.carry_time * 0.6:
 		await get_tree().process_frame
