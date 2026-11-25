@@ -19,6 +19,8 @@ func build(h: HoleData) -> void:
 		_build_water()
 	_build_pin()
 	_build_trees()
+	_build_bushes()
+	_build_walls()
 	_build_tee_markers()
 
 
@@ -236,6 +238,63 @@ func _build_trees() -> void:
 	ci.multimesh = mm_c
 	ci.name = "Canopies"
 	add_child(ci)
+
+
+func _build_bushes() -> void:
+	if hole.bushes.is_empty():
+		return
+	var m := SphereMesh.new()
+	m.radius = 1.0
+	m.height = 2.0
+	m.radial_segments = 10
+	m.rings = 6
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 1.0
+	m.material = mat
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = m
+	mm.instance_count = hole.bushes.size()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hole.seed_value + 7
+	for i in hole.bushes.size():
+		var b: Vector4 = hole.bushes[i]
+		var basis := Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3(b.w, b.w * 0.85, b.w))
+		mm.set_instance_transform(i, Transform3D(basis, Vector3(b.x, b.y, b.z)))
+		var g := rng.randf()
+		mm.set_instance_color(i, Color(0.1 + 0.06 * g, 0.3 + 0.1 * g, 0.1))
+	var mi := MultiMeshInstance3D.new()
+	mi.multimesh = mm
+	mi.name = "Bushes"
+	add_child(mi)
+
+
+func _build_walls() -> void:
+	for w in hole.walls:
+		var box := BoxMesh.new()
+		var half: Vector3 = w["half"]
+		box.size = half * 2.0
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.55, 0.52, 0.46)
+		mat.roughness = 0.95
+		box.material = mat
+		var mi := MeshInstance3D.new()
+		mi.mesh = box
+		mi.transform = Transform3D(Basis(Vector3.UP, w["yaw"]), w["center"])
+		mi.name = "Wall"
+		add_child(mi)
+		# Coping stones along the top so it reads as a dry-stone wall.
+		var cap := BoxMesh.new()
+		cap.size = Vector3(half.x * 2.0, 0.12, half.z * 2.0 + 0.12)
+		var cm := StandardMaterial3D.new()
+		cm.albedo_color = Color(0.45, 0.43, 0.39)
+		cap.material = cm
+		var ci := MeshInstance3D.new()
+		ci.mesh = cap
+		ci.transform = Transform3D(Basis(Vector3.UP, w["yaw"]), w["center"] + Vector3(0, half.y, 0))
+		add_child(ci)
 
 
 func _build_tee_markers() -> void:

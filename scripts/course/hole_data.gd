@@ -18,6 +18,9 @@ var approach_end := Vector2.ZERO
 var approach_half_width := 0.0
 var bunkers: Array[Blob] = []
 var pond: Blob = null
+var features: Array = [] # HoleGenerator.Feature values placed on this hole
+var bushes: Array = [] # Vector4(x, y, z, radius) for rendering
+var walls: Array = [] # wall obstacle dictionaries, for rendering
 var water_level := -1000.0
 
 # Grid

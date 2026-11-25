@@ -10,7 +10,8 @@ func test_holes_are_fair_across_many_seeds() -> void:
 		var hole := HoleGenerator.generate(s * 7919 + 13)
 		var problems := HoleGenerator.validate(hole)
 		check(problems.is_empty(), "seed %d: %s" % [s, problems])
-		check(hole.distance >= 70.0 and hole.distance <= 200.0, "seed %d distance" % s)
+		check(hole.distance >= 30.0 and hole.distance <= 100.0, "seed %d distance" % s)
+		check(HoleGenerator.find_route(hole) != null, "seed %d has a playable route" % s)
 		near(hole.dist_to_pin(hole.tee), hole.distance, 0.05, "seed %d tee-to-pin" % s)
 	var ms := Time.get_ticks_msec() - t0
 	print("         (%d holes in %d ms, %.0f ms each)" % [SEEDS, ms, float(ms) / SEEDS])
@@ -23,6 +24,7 @@ func test_same_seed_same_hole() -> void:
 	check(a.heights == b.heights, "heights")
 	check(a.surfaces == b.surfaces, "surfaces")
 	check(a.wind_10m == b.wind_10m, "wind")
+	check(a.obstacles.size() == b.obstacles.size() and a.features == b.features, "same obstacles and features")
 	var c := HoleGenerator.generate(4243)
 	check(a.pin != c.pin, "different seed differs")
 
@@ -39,9 +41,9 @@ func test_hazards_and_variety_appear() -> void:
 		if h.pond != null:
 			ponds += 1
 		bunkers += h.bunkers.size()
-		if h.distance < 110.0:
+		if h.distance < 50.0:
 			short += 1
-		if h.distance > 160.0:
+		if h.distance > 80.0:
 			long += 1
 		if h.elevation > 1.5:
 			uphill += 1
@@ -100,11 +102,37 @@ func test_ball_finishes_on_generated_terrain() -> void:
 func test_wild_slice_goes_out_of_bounds() -> void:
 	var hole := HoleGenerator.generate(11)
 	hole.trees = [] # trees could legitimately stop it first
+	hole.obstacles = []
 	var sw := LaunchModel.Swing.new()
 	sw.face_to_path_deg = 14.0
 	sw.path_deg = 12.0
 	var l := LaunchModel.compute(Clubs.get_club(0), sw)
+	# Aimed hard right so a short wedge hole's boundary is reachable.
+	l.velocity = l.velocity.rotated(Vector3.UP, -0.9)
+	l.spin = l.spin.rotated(Vector3.UP, -0.9)
 	var sim := BallSim.new(hole)
 	sim.launch(hole.tee + Vector3(0, BallSim.RADIUS, 0), l.velocity.rotated(Vector3.UP, -0.6), l.spin.rotated(Vector3.UP, -0.6))
 	sim.simulate()
 	check(sim.phase == BallSim.Phase.OUT, "huge slice is out of bounds (phase %d)" % sim.phase)
+
+
+func test_features_block_the_ordinary_shot_but_a_route_exists() -> void:
+	var puzzles := 0
+	var kinds := {}
+	for s in 40:
+		var h := HoleGenerator.generate(7000 + s * 13)
+		var tree_feature := false
+		for f in h.features:
+			kinds[f] = true
+			if f == HoleGenerator.Feature.GUARD_TREE or f == HoleGenerator.Feature.HIGH_TREE or f == HoleGenerator.Feature.TREE_GATE:
+				tree_feature = true
+		if not tree_feature:
+			continue
+		var plain := ShotPlanner.Shot.new()
+		plain.club_idx = 1
+		var p := ShotPlanner.solve(h, h.tee + Vector3(0, BallSim.RADIUS + 0.012, 0), h.pin, plain)
+		if p.blocked:
+			puzzles += 1
+		check(HoleGenerator.find_route(h) != null, "tree hole %d still has a route" % s)
+	check(puzzles >= 8, "tree features usually block the plain 55 shot (%d)" % puzzles)
+	check(kinds.size() >= 4, "variety of features (%d kinds)" % kinds.size())

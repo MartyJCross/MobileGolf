@@ -8,7 +8,14 @@ var surface_type: int = Surface.FAIRWAY
 var wind_10m: Vector3 = Vector3.ZERO # wind at 10 m height, m/s (horizontal)
 var green_softness: float = 1.0 # scales the green crater depth: 0.6 firm .. 1.3 soft
 var pin: Vector3 = Vector3(0, 0, -1.0e6)
-var trees: Array = [] # Array of {"pos": Vector3 canopy centre, "r": canopy radius}
+var trees: Array = [] # decorative/obstacle trees for rendering: {"pos", "r", "base", "trunk"}
+## Things the ball can hit. Dictionaries with "kind" and:
+##   CANOPY/BUSH: "center" (Vector3), "r"        (soft: grabs the ball)
+##   TRUNK:       "base" (Vector3), "h", "r"      (solid vertical cylinder)
+##   WALL:        "center", "half" (Vector3 half-size: length, height, thickness), "yaw"  (solid box)
+var obstacles: Array = []
+##   PIN:         like TRUNK (the flagstick), but never counts as "hitting an obstacle"
+enum { CANOPY, BUSH, TRUNK, WALL, PIN }
 const WIND_Z0 := 0.03 # roughness length of mown grass, m
 
 

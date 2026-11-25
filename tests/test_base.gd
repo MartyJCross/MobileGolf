@@ -18,7 +18,7 @@ func near(actual: float, expected: float, tol: float, what: String) -> void:
 static func shoot(terrain: GolfTerrain, club_id: String, swing: LaunchModel.Swing = null, from := Vector3(0, BallSim.RADIUS, 0)) -> BallSim:
 	if swing == null:
 		swing = LaunchModel.Swing.new()
-	var club := Clubs.get_club(Clubs.index_of(club_id))
+	var club := Clubs.find(club_id)
 	var l := LaunchModel.compute(club, swing)
 	var sim := BallSim.new(terrain)
 	sim.launch(from, l.velocity, l.spin)

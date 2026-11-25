@@ -40,6 +40,7 @@ class Swing:
 	var strike_high_mm: float = 0.0 # + high on face, - thin/low
 	var loft_offset_deg: float = 0.0 # shaft lean at impact: + adds loft (flip), - delofts (lag)
 	var aoa_offset_deg: float = 0.0 # + shallower, - steeper
+	var spin_scale: float = 1.0 # spin control: <1 a "runner" (less backspin), >1 a "spinner"
 
 
 class Result:
@@ -127,6 +128,7 @@ static func compute(club: Dictionary, swing: Swing) -> Result:
 	var speed_spin := pow(swing.speed_frac, PARTIAL_SPIN_EXP) if swing.speed_frac < 1.0 else swing.speed_frac
 	var spin_rpm: float = club["spin"] * speed_spin * sin(spin_loft) / sin(stock_spin_loft)
 	spin_rpm *= maxf(0.4, 1.0 - swing.strike_high_mm * STRIKE_V_SPIN_PER_MM)
+	spin_rpm *= swing.spin_scale
 	r.spin_rpm = spin_rpm
 
 	var axis := c.cross(n)

@@ -3,7 +3,7 @@ extends "res://tests/test_base.gd"
 
 
 func test_stock_launch_matches_tour_numbers() -> void:
-	for club in Clubs.SET:
+	for club in Clubs.TOUR_IRONS:
 		var l := LaunchModel.compute(club, LaunchModel.Swing.new())
 		near(l.ball_speed, club["ball_mph"] * Clubs.MPH, 0.01 * club["ball_mph"] * Clubs.MPH, "%s ball speed" % club["id"])
 		near(l.launch_v_deg, club["launch"], 0.3, "%s launch" % club["id"])
@@ -13,7 +13,7 @@ func test_stock_launch_matches_tour_numbers() -> void:
 
 
 func test_stock_flight_matches_tour_carry_and_landing() -> void:
-	for club in Clubs.SET:
+	for club in Clubs.TOUR_IRONS:
 		var l := LaunchModel.compute(club, LaunchModel.Swing.new())
 		var sim := BallSim.new(flat())
 		sim.launch(Vector3(0, BallSim.RADIUS, 0), l.velocity, l.spin)
@@ -28,7 +28,7 @@ func test_stock_flight_matches_tour_carry_and_landing() -> void:
 
 func test_longer_clubs_go_further() -> void:
 	var prev := 1e9
-	for club in Clubs.SET:
+	for club in Clubs.TOUR_IRONS:
 		var sim := shoot(flat(Surface.ROUGH), club["id"])
 		check(sim.carry_distance() < prev, "%s should carry less than the longer club" % club["id"])
 		prev = sim.carry_distance()
@@ -55,7 +55,7 @@ func test_face_closed_to_path_draws_left() -> void:
 	var sw := LaunchModel.Swing.new()
 	sw.path_deg = 3.0
 	sw.face_to_path_deg = -3.0 # face square to target, closed to the in-to-out path
-	var l := LaunchModel.compute(Clubs.get_club(Clubs.index_of("7i")), sw)
+	var l := LaunchModel.compute(Clubs.find("7i"), sw)
 	check(l.spin_axis_deg < -3.0, "draw spin axis tilts left (%.1f)" % l.spin_axis_deg)
 	check(l.launch_h_deg > 0.0, "starts right of target, toward the path")
 	var t := flat(Surface.ROUGH)
@@ -70,7 +70,7 @@ func test_face_open_to_path_fades_right() -> void:
 	var sw := LaunchModel.Swing.new()
 	sw.path_deg = -3.0
 	sw.face_to_path_deg = 3.0
-	var l := LaunchModel.compute(Clubs.get_club(Clubs.index_of("7i")), sw)
+	var l := LaunchModel.compute(Clubs.find("7i"), sw)
 	check(l.spin_axis_deg > 3.0, "fade spin axis tilts right (%.1f)" % l.spin_axis_deg)
 	var sim := BallSim.new(flat(Surface.ROUGH))
 	sim.launch(Vector3(0, BallSim.RADIUS, 0), l.velocity, l.spin)
@@ -92,7 +92,7 @@ func test_bigger_face_to_path_curves_more() -> void:
 func test_push_with_square_face_to_path_is_straight_right() -> void:
 	var sw := LaunchModel.Swing.new()
 	sw.path_deg = 4.0
-	var l := LaunchModel.compute(Clubs.get_club(Clubs.index_of("8i")), sw)
+	var l := LaunchModel.compute(Clubs.find("8i"), sw)
 	near(l.spin_axis_deg, 0.0, 0.2, "no curve spin when face == path")
 	near(l.launch_h_deg, 4.0, 0.1, "starts on the path")
 
@@ -101,14 +101,14 @@ func test_partial_swing_shorter_with_less_spin() -> void:
 	var full := shoot(flat(Surface.ROUGH), "PW")
 	var sw := LaunchModel.Swing.new()
 	sw.speed_frac = 0.6
-	var l := LaunchModel.compute(Clubs.get_club(Clubs.index_of("PW")), sw)
+	var l := LaunchModel.compute(Clubs.find("PW"), sw)
 	var half := shoot(flat(Surface.ROUGH), "PW", sw)
 	check(half.carry_distance() < full.carry_distance() * 0.6, "60% swing carries well under 60% of full")
 	check(l.spin_rpm < 9304.0 and l.spin_rpm > 9304.0 * 0.6, "partial swing keeps most of its spin (%.0f)" % l.spin_rpm)
 
 
 func test_high_trajectory_launches_higher_with_more_spin() -> void:
-	var club := Clubs.get_club(Clubs.index_of("8i"))
+	var club := Clubs.find("8i")
 	var sw_hi := LaunchModel.Swing.new()
 	sw_hi.trajectory = 1.0
 	var sw_lo := LaunchModel.Swing.new()
@@ -121,7 +121,7 @@ func test_high_trajectory_launches_higher_with_more_spin() -> void:
 
 
 func test_off_centre_strike_loses_speed() -> void:
-	var club := Clubs.get_club(Clubs.index_of("7i"))
+	var club := Clubs.find("7i")
 	var sw := LaunchModel.Swing.new()
 	sw.strike_toe_mm = 12.0
 	var toe := LaunchModel.compute(club, sw)
@@ -250,3 +250,97 @@ class SlopeTerrain extends GolfTerrain:
 
 	func get_normal(_x: float, _z: float) -> Vector3:
 		return Vector3(grade, 1.0, 0.0).normalized()
+
+
+# ------------------------------------------------------------- wedges, planner, obstacles
+
+func test_wedges_carry_their_listed_distances() -> void:
+	var prev := 1e9
+	for club in Clubs.SET:
+		var l := LaunchModel.compute(club, LaunchModel.Swing.new())
+		var sim := BallSim.new(flat())
+		sim.launch(Vector3(0, BallSim.RADIUS, 0), l.velocity, l.spin)
+		sim.simulate_flight()
+		var want := Clubs.stock_carry_m(club)
+		near(sim.carry_distance(), want, want * 0.02, "%s carry" % club["id"])
+		check(sim.carry_distance() < prev, "%s shorter than the stronger wedge" % club["id"])
+		prev = sim.carry_distance()
+
+
+func test_planner_lands_on_target_for_every_shot_type() -> void:
+	var t := flat(Surface.GREEN)
+	t.wind_10m = Vector3(3, 0, 2)
+	for h in ShotPlanner.HEIGHTS.size():
+		for curve in [-1.0, 0.0, 1.0]:
+			var shot := ShotPlanner.Shot.new()
+			shot.club_idx = 2
+			shot.height_idx = h
+			shot.curve = curve
+			var target := Vector3(4, 0, -45)
+			var p := ShotPlanner.solve(t, Vector3(0, BallSim.RADIUS, 0), target, shot)
+			# Fly it for real (fine time step, wind on).
+			var lv := ShotPlanner.launch_vectors(shot, p.speed_frac, p.yaw_deg)
+			var sim := BallSim.new(t)
+			sim.launch(Vector3(0, BallSim.RADIUS, 0), lv[0], lv[1])
+			sim.simulate_flight()
+			near(Vector2(sim.carry_pos.x - target.x, sim.carry_pos.z - target.z).length(), 0.0, 0.4, "%s curve %.0f lands on the ring" % [ShotPlanner.HEIGHTS[h]["name"], curve])
+
+
+func test_planner_reports_out_of_range() -> void:
+	var shot := ShotPlanner.Shot.new()
+	shot.club_idx = 2 # 60 degree
+	shot.height_idx = 3 # flop
+	var p := ShotPlanner.solve(flat(), Vector3(0, BallSim.RADIUS, 0), Vector3(0, 0, -110), shot)
+	check(p.too_far, "110 m flop with a 60 degree is out of range")
+
+
+func test_heights_and_spin_change_the_shot() -> void:
+	var t := flat(Surface.GREEN)
+	var apex := []
+	var rest := []
+	for h in [0, 3]:
+		var shot := ShotPlanner.Shot.new()
+		shot.height_idx = h
+		var p := ShotPlanner.solve(t, Vector3(0, BallSim.RADIUS, 0), Vector3(0, 0, -40), shot)
+		apex.append(p.apex)
+		var lv := ShotPlanner.launch_vectors(shot, p.speed_frac, p.yaw_deg)
+		var sim := BallSim.new(t)
+		sim.launch(Vector3(0, BallSim.RADIUS, 0), lv[0], lv[1])
+		sim.simulate()
+		rest.append(-sim.pos.z - 40.0)
+	check(apex[1] > apex[0] * 2.0, "flop goes much higher than a punch (%.1f vs %.1f)" % [apex[1], apex[0]])
+	check(rest[0] > rest[1] + 5.0, "punch runs out, flop stops (%.1f vs %.1f m past)" % [rest[0], rest[1]])
+	var roll := []
+	for sp in [-1.0, 1.0]:
+		var shot2 := ShotPlanner.Shot.new()
+		shot2.spin = sp
+		var p2 := ShotPlanner.solve(t, Vector3(0, BallSim.RADIUS, 0), Vector3(0, 0, -60), shot2)
+		var lv2 := ShotPlanner.launch_vectors(shot2, p2.speed_frac, p2.yaw_deg)
+		var sim2 := BallSim.new(t)
+		sim2.launch(Vector3(0, BallSim.RADIUS, 0), lv2[0], lv2[1])
+		sim2.simulate()
+		roll.append(-sim2.pos.z - 60.0)
+	check(roll[0] > roll[1] + 3.0, "runner releases, max spin checks (%.1f vs %.1f)" % [roll[0], roll[1]])
+
+
+func test_solid_obstacles_bounce_soft_ones_grab() -> void:
+	var t := flat(Surface.FAIRWAY)
+	t.obstacles = [{"kind": GolfTerrain.WALL, "center": Vector3(0, 0.6, -10), "half": Vector3(5, 0.6, 0.3), "yaw": 0.0}]
+	var sim := BallSim.new(t)
+	sim.launch(Vector3(0, BallSim.RADIUS, 0), Vector3(0, 2, -15), Vector3.ZERO)
+	sim.simulate()
+	check(sim.hit_tree and sim.pos.z > -10.0, "low ball bounces back off the wall (z %.1f)" % sim.pos.z)
+	var t2 := flat(Surface.FAIRWAY)
+	t2.obstacles = [{"kind": GolfTerrain.CANOPY, "center": Vector3(0, 6, -20), "r": 3.0}]
+	var s2 := BallSim.new(t2)
+	s2.launch(Vector3(0, BallSim.RADIUS, 0), LaunchModel.dir_from(0, 20) * 30.0, Vector3(300, 0, 0))
+	s2.simulate()
+	check(s2.hit_tree and -s2.pos.z < 30.0, "ball into a canopy drops short (z %.1f)" % s2.pos.z)
+	var t3 := flat(Surface.GREEN)
+	t3.pin = Vector3(0, 0, -30)
+	t3.obstacles = [{"kind": GolfTerrain.PIN, "base": Vector3(0, 0, -30), "h": 2.2, "r": 0.0125}]
+	var s3 := BallSim.new(t3)
+	s3.launch(Vector3(0, 1.0, -28), Vector3(0, -2, -12), Vector3.ZERO)
+	s3.simulate()
+	check(not s3.hit_tree, "the flagstick isn't counted as an obstacle")
+	check(Vector2(s3.pos.x, s3.pos.z + 30).length() < 3.0, "ball hitting the flagstick drops near it")

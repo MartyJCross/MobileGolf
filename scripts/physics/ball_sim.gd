@@ -83,7 +83,10 @@ var land_spin_rpm := 0.0
 var land_surface: int = -1
 var apex := 0.0
 var bounces := 0
-var hit_tree := false
+var hit_tree := false # touched any obstacle
+var first_hit_pos := Vector3.ZERO # where it first touched one
+var use_obstacles := true
+var ignore_wind := false # shot planning: plan for still air
 var water_pos := Vector3.ZERO # where the ball went in the water / out of bounds
 var _trees_hit := {}
 var _record_acc := 0.0
@@ -106,6 +109,7 @@ func launch(from: Vector3, velocity: Vector3, spin_vec: Vector3) -> void:
 	bounces = 0
 	hit_tree = false
 	_trees_hit.clear()
+	first_hit_pos = Vector3.ZERO
 	frames.clear()
 	frame_spin.clear()
 	frame_phase.clear()
@@ -172,7 +176,7 @@ func total_distance() -> float:
 func _accel(p: Vector3, v: Vector3, w: Vector3) -> Vector3:
 	var a := Vector3(0.0, -G, 0.0)
 	var h := p.y - terrain.get_height(p.x, p.z)
-	var vrel := v - terrain.wind_at(h)
+	var vrel := v if ignore_wind else v - terrain.wind_at(h)
 	var speed := vrel.length()
 	if speed < 0.05:
 		return a
@@ -212,7 +216,8 @@ func _flight_step(dt: float) -> void:
 	if not landed:
 		apex = maxf(apex, pos.y - start_pos.y)
 
-	_check_trees()
+	if use_obstacles:
+		_check_obstacles(false)
 	if terrain.is_out_of_bounds(pos.x, pos.z):
 		phase = Phase.OUT
 		water_pos = pos
@@ -234,19 +239,82 @@ func _flight_step(dt: float) -> void:
 		_impact()
 
 
-func _check_trees() -> void:
-	for i in terrain.trees.size():
-		if _trees_hit.has(i):
+## Obstacles (see GolfTerrain.obstacles):
+##   soft (canopy, bush): leaves and twigs grab the ball once: most of its
+##     speed goes, the direction scatters, and it drops.
+##   solid (trunk, wall): the ball bounces off (restitution ~0.45, with
+##     friction along the surface).
+func _check_obstacles(rolling: bool) -> void:
+	for i in terrain.obstacles.size():
+		var o: Dictionary = terrain.obstacles[i]
+		var kind: int = o["kind"]
+		if kind == GolfTerrain.CANOPY or kind == GolfTerrain.BUSH:
+			if _trees_hit.has(i):
+				continue
+			if pos.distance_to(o["center"]) < float(o["r"]) + RADIUS:
+				_trees_hit[i] = true
+				_note_hit()
+				var keep := rng.randf_range(0.1, 0.3) if kind == GolfTerrain.CANOPY else rng.randf_range(0.05, 0.15)
+				var sp := vel.length() * keep
+				var d := Vector3(rng.randf_range(-1, 1), rng.randf_range(-0.7, 0.2), rng.randf_range(-1, 1))
+				vel = (vel.normalized() * 0.4 + d.normalized()).normalized() * sp
+				spin *= 0.2
+				if rolling:
+					vel *= 0.3
 			continue
-		var t: Dictionary = terrain.trees[i]
-		if pos.distance_to(t["pos"]) < t["r"]:
-			_trees_hit[i] = true
-			hit_tree = true
-			# Branches: kill most of the speed, scatter direction, drop it.
-			var sp := vel.length() * rng.randf_range(0.1, 0.35)
-			var d := Vector3(rng.randf_range(-1, 1), rng.randf_range(-0.6, 0.3), rng.randf_range(-1, 1))
-			vel = (vel.normalized() * 0.4 + d.normalized()).normalized() * sp
-			spin *= 0.2
+		var n := Vector3.ZERO
+		if kind == GolfTerrain.TRUNK or kind == GolfTerrain.PIN:
+			var base: Vector3 = o["base"]
+			if pos.y < base.y - 0.5 or pos.y > base.y + float(o["h"]):
+				continue
+			var d2 := Vector2(pos.x - base.x, pos.z - base.z)
+			var rr := float(o["r"]) + RADIUS
+			if d2.length() >= rr:
+				continue
+			var dn := d2.normalized() if d2.length() > 1e-5 else Vector2(1, 0)
+			pos.x = base.x + dn.x * rr
+			pos.z = base.z + dn.y * rr
+			n = Vector3(dn.x, 0, dn.y)
+		elif kind == GolfTerrain.WALL:
+			var c: Vector3 = o["center"]
+			var h: Vector3 = o["half"]
+			var yaw: float = o["yaw"]
+			var local := (pos - c).rotated(Vector3.UP, -yaw)
+			var pen := Vector3(h.x + RADIUS - absf(local.x), h.y + RADIUS - absf(local.y), h.z + RADIUS - absf(local.z))
+			if pen.x <= 0.0 or pen.y <= 0.0 or pen.z <= 0.0:
+				continue
+			# Push out along the axis of least penetration.
+			var ln := Vector3.ZERO
+			if pen.x < pen.y and pen.x < pen.z:
+				ln = Vector3(signf(local.x), 0, 0)
+				local.x = signf(local.x) * (h.x + RADIUS)
+			elif pen.y < pen.z:
+				ln = Vector3(0, signf(local.y), 0)
+				local.y = signf(local.y) * (h.y + RADIUS)
+			else:
+				ln = Vector3(0, 0, signf(local.z))
+				local.z = signf(local.z) * (h.z + RADIUS)
+			pos = c + local.rotated(Vector3.UP, yaw)
+			n = ln.rotated(Vector3.UP, yaw)
+		else:
+			continue
+		var vn := vel.dot(n)
+		if vn < 0.0:
+			var vt := vel - n * vn
+			if kind == GolfTerrain.PIN:
+				# A flagstick soaks up most of the hit; the ball drops near it.
+				vel = vt * 0.3 - n * vn * 0.1
+				spin *= 0.15
+			else:
+				_note_hit()
+				vel = vt * 0.75 - n * vn * 0.45
+				spin *= 0.5
+
+
+func _note_hit() -> void:
+	if not hit_tree:
+		hit_tree = true
+		first_hit_pos = pos
 
 
 # ---------------------------------------------------------------- impact
@@ -273,11 +341,6 @@ func _impact() -> void:
 	if s == Surface.WATER:
 		phase = Phase.WATER
 		water_pos = pos
-		return
-
-	# Dunk: lands straight in the cup.
-	if _cup_dist() < CUP_RADIUS - RADIUS * 0.5:
-		phase = Phase.HOLED
 		return
 
 	var prm := terrain.surface_params(pos.x, pos.z)
@@ -372,6 +435,8 @@ func _ground_step(dt: float) -> void:
 	spin -= n * wn * (1.0 - exp(-6.0 * dt))
 
 	pos += vel * dt
+	if use_obstacles:
+		_check_obstacles(true)
 	if terrain.is_out_of_bounds(pos.x, pos.z):
 		phase = Phase.OUT
 		water_pos = pos

@@ -16,9 +16,8 @@ var greens_hit := 0
 var recent: Array = []
 var hole_number := 1
 var base_seed := 0
-var tempo := 0.55 # downswing slow-motion factor
-var controls := 0 # SwingControls.Scheme
-var show_mark := true # release mark assist
+var meter := true # accuracy needle on the HIT button
+var plan_wind := true # preview includes the wind (off = plan in still air, read it yourself)
 
 
 func load_stats() -> void:
@@ -34,9 +33,8 @@ func load_stats() -> void:
 	recent = cfg.get_value("stats", "recent", [])
 	hole_number = cfg.get_value("game", "hole_number", 1)
 	base_seed = cfg.get_value("game", "base_seed", randi())
-	tempo = cfg.get_value("settings", "tempo", 0.55)
-	controls = cfg.get_value("settings", "controls", 0)
-	show_mark = cfg.get_value("settings", "show_mark", true)
+	meter = cfg.get_value("settings", "meter", true)
+	plan_wind = cfg.get_value("settings", "plan_wind", true)
 
 
 func save_stats() -> void:
@@ -49,9 +47,8 @@ func save_stats() -> void:
 	cfg.set_value("stats", "recent", recent)
 	cfg.set_value("game", "hole_number", hole_number)
 	cfg.set_value("game", "base_seed", base_seed)
-	cfg.set_value("settings", "tempo", tempo)
-	cfg.set_value("settings", "controls", controls)
-	cfg.set_value("settings", "show_mark", show_mark)
+	cfg.set_value("settings", "meter", meter)
+	cfg.set_value("settings", "plan_wind", plan_wind)
 	cfg.save(PATH)
 
 

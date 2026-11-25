@@ -1,61 +1,50 @@
 # Mobile Golf
 
-An endless par-3 golf game for Android with realistic ball flight and spin.
-Every hole is randomly generated: 70–200 m, a random green, bunkers,
-sometimes water, wind and green firmness. One shot per hole, scored by how
-close you finish to the pin. Your average is saved on the phone.
+An endless arcade wedge game for Android with realistic ball flight and spin.
+Every hole is a short (30–100 m), randomly generated puzzle: a green that may be
+tiered or have a backstop, bunkers, sometimes water, wind, firm or soft greens,
+and obstacles you have to work the ball over, under or around: a tree guarding
+the line, a tree with high branches, a gap between two trees, a hedge, a stone
+wall. One shot per hole, scored by how close you finish to the pin; your
+average is saved on the phone.
 
 ## How to play
 
-1. Pick an iron (3-iron to pitching wedge) with `<` / `>`. The number under it is
-   how far a full, perfectly timed swing carries with no wind.
-2. Optional set-up:
-   * **Trajectory** Low ↔ High: low flies under the wind and runs out, high spins and stops.
-   * **Shape** Draw ↔ Fade: sets your stance and swing path. Timing decides whether it comes off.
-3. Aim by dragging left/right on the course view (or use **Map** for an overhead view).
-4. Swing with the golfer at the bottom of the screen (default controls, **Pull & Tap**):
-   * **Drag down** to pull the club back. It follows your thumb; slide back up to shorten it.
-     Further = more distance (the white mark on the meter is a full swing, past it is an over-swing).
-   * **Let go** to swing. Your arms pull the club down with the wrists cocked: that's the lag.
-   * **Tap as the hands cross the green line** to release the club. The line is where the
-     physics says a perfect release happens for your backswing.
-     * On time: full speed, square face.
-     * Early (casting): the club flips past your hands: higher, weaker, face closing, pulls and hooks.
-     * Late: the club is still lagging: lower, face open, pushes and slices.
-     * No tap: your wrists give way late on their own: a weak, low push-slice.
-   * Other schemes in **Settings → Controls**: One Touch (drag down, push up, lift at the line),
-     Hold & Tap, Three Taps. The green line can be turned off for a harder game.
+The skill is seeing the shot.
 
-The downswing plays in slow motion so it can be timed by a human thumb.
-**Settings → Downswing speed** goes from 30% up to real speed.
+1. **Drag on the course** to move your landing spot (the ring). Use **Map** for a top-down view.
+   The arc shows the planned flight, wind included: white is clear, **red hits something**.
+   The little side-on view above HIT shows the height, so you can see if you'll clear a tree
+   or fit under its branches.
+2. **Pick a wedge**: 50°, 55° or 60° (they carry about 100 / 88 / 76 m at full power;
+   the game sets the power for your landing spot).
+3. **Pick a height**: Punch (low, runs out, goes under branches), Normal, High, Flop
+   (very high, lands soft, goes over trees).
+4. **Drag the dot on the ball** for spin: down = more backspin (checks, can spin back),
+   up = a runner that releases, left/right = draw/fade to curve around things.
+5. Think about where it goes **after** it lands (slopes, tiers, firmness, spin), then **HIT**.
+   Stop the needle in the green zone for a pure strike (it can be turned off in Settings).
 
-## The swing model
+Settings also has a **pro mode**: the preview plans for still air and you read the wind yourself.
 
-The swing is a double pendulum (arms + club hinged at the wrists), the classic
-golf-research model. The body drives the arms with a torque; the wrists hold the
-club cocked until you tap, then fire it through. Clubhead speed, how far the club
-lags or flips at impact, and how centred the strike is all come out of the physics,
-and are turned into club speed, face angle, path, dynamic loft and strike for the
-ball-flight model. A perfectly timed full swing is ~90 mph with the club in line
-with the arms at impact.
+## How a hole is made
+
+`HoleGenerator` builds the terrain and green, flies the ordinary shot (55°, normal,
+straight) and puts the hole's feature right where that shot goes, then test-plays the
+hole with the `ShotPlanner` (every wedge × height × curve) and only keeps it if some
+shot lands at the pin without hitting anything.
 
 ## The physics (short version)
 
-* **Launch:** D-plane model anchored to TrackMan PGA Tour averages for each iron.
-  Face-to-path sets the spin axis (draw/fade), spin loft sets backspin.
+* **Launch:** D-plane model anchored to TrackMan PGA Tour averages (irons) and typical
+  tour wedge numbers. Face-to-path sets the spin axis (draw/fade), spin loft sets backspin.
 * **Flight:** drag + Magnus lift fitted to tour carry and landing angles
   (carry within 2.5%), spin decay, wind that grows with height.
 * **Landing:** turf impact model (Penner) where backspin and landing angle decide
   whether the ball releases, checks or spins back; green firmness matters.
 * **Roll:** speed-dependent rolling resistance calibrated to Stimp 11; slopes break the ball.
-
-## Choosing the controls
-
-`tests/tools/experiment_controls.gd` compares the schemes with simulated players
-(typical human timing/positioning errors fed through the real swing and ball physics).
-The release line halves the average miss (30 m → 15 m on a full 7-iron); dragging the
-backswing gives the best distance control on partial swings; One Touch is less precise
-because lifting a thumb is less precise than tapping.
+* **Obstacles:** trunks and stone walls bounce the ball, canopies and hedges grab it and drop
+  it, the flagstick knocks a ball that lands on it down near the hole.
 
 ## Development
 

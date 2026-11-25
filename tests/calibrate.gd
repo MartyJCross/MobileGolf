@@ -131,7 +131,7 @@ static func fly(params: Dictionary, club: Dictionary, dt := BallSim.DT) -> Dicti
 
 static func _error(params: Dictionary) -> float:
 	var err := 0.0
-	for club in Clubs.SET:
+	for club in Clubs.TOUR_IRONS:
 		var r := fly(params, club, 1.0 / 120.0)
 		var carry_t: float = club["carry_yd"] * Clubs.YARD
 		var apex_t: float = club["apex_yd"] * Clubs.YARD
@@ -144,6 +144,6 @@ static func _error(params: Dictionary) -> float:
 static func _report(params: Dictionary) -> void:
 	print("params ", params)
 	print("club  carry(m) tgt   apex(m) tgt  land  tgt  hang")
-	for club in Clubs.SET:
+	for club in Clubs.TOUR_IRONS:
 		var r := fly(params, club)
 		print("%-4s %7.1f %5.1f  %6.1f %5.1f  %4.1f %4.1f %4.1fs" % [club["id"], r["carry"], club["carry_yd"] * Clubs.YARD, r["apex"], club["apex_yd"] * Clubs.YARD, r["land"], club["land"], r["time"]])
